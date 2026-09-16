@@ -22,6 +22,20 @@ class FixtureProvider:
         return json.loads(self.path.read_text(encoding="utf-8"))
 
 
+class MemoizedProvider:
+    """Share one provider response within a CLI invocation."""
+
+    def __init__(self, provider):
+        self.provider = provider
+        self.responses = {}
+
+    def fetch(self, ticker, as_of):
+        key = (ticker, as_of)
+        if key not in self.responses:
+            self.responses[key] = self.provider.fetch(ticker, as_of)
+        return self.responses[key]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("ticker", help="Stock ticker; initial filing coverage is US SEC issuers")
@@ -34,6 +48,10 @@ def main(argv=None):
     parser.add_argument("--sec-user-agent", default=os.getenv("SEC_USER_AGENT", ""),
                         help="Identifying SEC User-Agent, normally organization/name and contact email")
     parser.add_argument("--no-market", action="store_true", help="Skip the optional Yahoo market feed")
+    parser.add_argument("--filings", action="store_true",
+                        help="Extract capital-structure candidates from the latest SEC annual/quarterly filing")
+    parser.add_argument("--max-filings", type=int, choices=(1, 2, 3), default=1,
+                        help="Maximum primary filings fetched with --filings (default: 1)")
     parser.add_argument("--fixture", action="append", type=Path, default=[],
                         help="Offline provider response JSON; disables all live providers; repeatable")
     parser.add_argument("--require-sufficient", action="store_true",
@@ -43,13 +61,23 @@ def main(argv=None):
     if not re.fullmatch(r"[A-Z0-9][A-Z0-9.^=-]{0,29}", ticker):
         parser.error("Ticker must be a short symbol, not a path or free-form company name")
 
+    filing_provider = None
     if args.fixture:
         providers = [FixtureProvider(path) for path in args.fixture]
     else:
         from .providers.sec import SecEdgarProvider
 
         cache = EvidenceCache(args.cache_dir)
-        providers = [SecEdgarProvider(user_agent=args.sec_user_agent, cache=cache)]
+        sec = MemoizedProvider(SecEdgarProvider(user_agent=args.sec_user_agent, cache=cache))
+        providers = [sec]
+        if args.filings:
+            from .providers.filing import SecFilingProvider
+
+            filing_provider = MemoizedProvider(SecFilingProvider(
+                user_agent=args.sec_user_agent, cache=cache, sec_provider=sec,
+                max_filings=args.max_filings,
+            ))
+            providers.append(filing_provider)
         if not args.no_market:
             import yfinance as yf
 
@@ -69,6 +97,11 @@ def main(argv=None):
         json.dumps(packet.to_dict(), indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8"
     )
     (target / "coverage.md").write_text(packet.to_markdown(), encoding="utf-8")
+    if filing_provider is not None:
+        (target / "filing-evidence.json").write_text(
+            json.dumps(list(filing_provider.responses.values()), indent=2, ensure_ascii=False,
+                       allow_nan=False), encoding="utf-8"
+        )
     print(f"Evidence status: {packet.status.value} (not an investment rating)")
     print(f"Packet: {(target / 'packet.json').resolve()}")
     print(f"Coverage: {(target / 'coverage.md').resolve()}")

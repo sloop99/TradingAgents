@@ -79,6 +79,10 @@ def normalize_concept(fact: EvidenceFact) -> EvidenceFact:
     The original fact remains untouched.  This also makes SEC packets cached
     before the provider metric split usable by the reconciliation pass.
     """
+    # Inline filing candidates can be dimensioned or have issuer-specific scope.
+    # A familiar taxonomy tag alone must never promote them into consolidated data.
+    if fact.metric.startswith("filing_"):
+        return fact
     tag = _normalized_tag(fact.source_tag)
     metric = _SEC_TAG_METRICS.get(tag, _canonical_metric(fact.metric))
     # This is the documented standard US-GAAP cash-payment concept.  It is the
@@ -102,7 +106,8 @@ def reconcile_facts(facts: list[EvidenceFact]) -> ReconciliationResult:
     start/end period, and adjustment basis.  This function never derives a
     period value and never sums components.
     """
-    normalized = [(fact, normalize_concept(fact)) for fact in facts]
+    candidates = [fact for fact in facts if fact.metric.startswith("filing_")]
+    normalized = [(fact, normalize_concept(fact)) for fact in facts if not fact.metric.startswith("filing_")]
     issues: list[ResearchIssue] = []
     excluded: set[str] = set()
 
@@ -152,7 +157,12 @@ def reconcile_facts(facts: list[EvidenceFact]) -> ReconciliationResult:
             issues.append(_issue("ADJUSTMENT_BASIS_CONFLICT", peers[0][1].metric, start, end, f"use bases {sorted(bases)}"))
 
     selected: list[EvidenceFact] = []
-    decisions: list[dict] = []
+    decisions: list[dict] = [
+        {"metric": fact.metric, "candidate_fact_ids": [fact.fact_id],
+         "selected_fact_id": None, "outcome": "candidate_only",
+         "reason": "filing_context_requires_reconciliation"}
+        for fact in sorted(candidates, key=lambda item: item.fact_id)
+    ]
     for key in sorted(exact_groups, key=_exact_group_sort_key):
         peers = exact_groups[key]
         originals = [original for original, _ in peers]

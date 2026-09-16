@@ -423,6 +423,9 @@ class ResearchPacket:
             lines.append(f"User thesis (unverified): {self.thesis}")
         if self.financial_analysis:
             lines.append("Financial inputs reconciled by concept and period; superseded reported facts remain in the full packet. Calculations do not establish valuation readiness.")
+        filing_count = sum(f.metric.startswith("filing_") for f in self.facts)
+        if filing_count:
+            lines.append(f"Inline filing candidates: {filing_count}; retained for context review, excluded from consolidated calculations.")
         capitalization = self.financial_analysis.get("capitalization", {})
         if capitalization:
             missing = ", ".join(capitalization.get("missing_metrics", [])) or "none"
@@ -500,6 +503,11 @@ class ResearchPacket:
                           "Withheld metrics: " + (", ".join(capitalization.get("missing_metrics", [])) or "none") + ".", ""])
             for requirement, satisfied in capitalization.get("market_cap_prerequisites", {}).items():
                 lines.append(f"- {requirement}: {'supported' if satisfied else 'unresolved'}")
+        filing_candidates = [fact for fact in self.facts if fact.metric.startswith("filing_")]
+        if filing_candidates:
+            lines.extend(["", "## Filing context review", "",
+                          f"{len(filing_candidates)} inline filing candidates retained with source anchors and context definitions.",
+                          "These may represent individual share classes, debt instruments or other dimensions; they are excluded from consolidated calculations pending reconciliation."])
         lines.extend(["", "## Facts", ""])
         if not self.facts:
             lines.append("No eligible facts were retained.")

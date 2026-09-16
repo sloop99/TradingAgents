@@ -228,3 +228,23 @@ the built-in providers do not yet supply complete share-class/split/capital-stru
 proofs. The positive arithmetic path is covered by controlled numerical tests.
 Local combined packets are under `.tradingagents/validation/capitalization/`.
 Final regression: 708 passed, 2 optional skips and 70 subtests passed; Ruff passed.
+
+### Filing-level evidence implementation (2026-09-16)
+
+The optional [filing evidence pass](filing-evidence.md) retrieves primary SEC
+filings and retains share-class and debt-instrument contexts, numeric scale/sign,
+source locations and review snippets. Run with `--filings`; one filing is fetched
+by default, with a maximum of three per invocation. Cached snapshots support
+offline replay and retain original retrieval times.
+
+Filing candidates are explicitly excluded from consolidated calculations, even
+when their source tag matches a familiar financial metric. This prevents an
+individual class or debt instrument from replacing a company total. The phase
+adds source extraction and review evidence; it does not complete automatic
+capital-structure reconciliation or unlock verified live multiples by itself.
+
+Live validation retrieved all six sample filings and retained 388 candidates.
+127 matched aggregate SEC observations with no disagreements; three direct source
+checks passed. Network-disabled replay and packet roundtrips passed. Final suite:
+725 passed, 2 optional skips, 70 subtests passed. Detailed local artifacts are in
+`.tradingagents/validation/filings/`.
