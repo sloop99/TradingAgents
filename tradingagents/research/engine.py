@@ -20,6 +20,7 @@ from .models import (
     ResearchPacket,
 )
 from .reconciliation import reconcile_facts
+from .reviewed_inputs import apply_reviewed_inputs
 
 _EXCHANGE_ALIASES = {
     "nasdaq": "Nasdaq",
@@ -64,6 +65,8 @@ def build_packet(
     providers: Iterable[ResearchProvider],
     horizon: str = "long_term",
     thesis: str | None = None,
+    *,
+    review_manifest: dict[str, Any] | None = None,
 ) -> ResearchPacket:
     """Build one evidence packet without making any network calls itself."""
     normalized_ticker = str(ticker).strip().upper()
@@ -228,8 +231,11 @@ def build_packet(
     issues.extend(filing_review.issues)
     financials = analyze_financials(reconciled.selected_facts, business_model)
     issues.extend(financials.issues)
+    reviewed = apply_reviewed_inputs(facts, review_manifest, normalized_ticker, normalized_as_of)
+    issues.extend(reviewed.issues)
     capitalization = analyze_capitalization(
-        reconciled.selected_facts + financials.derived_facts, business_model, normalized_as_of
+        reconciled.selected_facts + financials.derived_facts + reviewed.derived_facts,
+        business_model, normalized_as_of
     )
     issues.extend(capitalization.issues)
     stale_inputs = financials.summary.get("stale_inputs", [])
@@ -257,6 +263,7 @@ def build_packet(
     coverage["financial_calculations"] = "partial" if financials.derived_facts else "unsupported"
     coverage["capitalization"] = capitalization.summary["status"]
     coverage["filing_reconciliation"] = filing_review.summary["status"]
+    coverage["reviewed_inputs"] = "partial" if reviewed.derived_facts else "unsupported"
     if any(fact.metric in {"enterprise_value_to_revenue", "price_to_earnings", "price_to_free_cash_flow"}
            for fact in capitalization.derived_facts):
         coverage["valuation"] = "partial"
@@ -280,7 +287,7 @@ def build_packet(
         status=status,
         business_model=checked.business_model,
         identity=identity,
-        facts=facts + financials.derived_facts + capitalization.derived_facts + filing_review.derived_facts,
+        facts=facts + financials.derived_facts + reviewed.derived_facts + capitalization.derived_facts + filing_review.derived_facts,
         documents=sorted(
             documents,
             key=lambda item: (item.published_at, item.document_id),
@@ -295,6 +302,7 @@ def build_packet(
             "summary": financials.summary,
             "capitalization": capitalization.summary,
             "filing_reconciliation": filing_review.summary,
+            "reviewed_inputs": reviewed.summary,
         },
     )
 

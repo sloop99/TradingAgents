@@ -429,6 +429,9 @@ class ResearchPacket:
         filing_review = self.financial_analysis.get("filing_reconciliation", {})
         if filing_review.get("status") not in (None, "unsupported"):
             lines.append(f"Filing reconciliation: {filing_review['status']}; scoped subtotals do not establish total debt or complete share-class coverage.")
+        reviewed = self.financial_analysis.get("reviewed_inputs", {})
+        if reviewed.get("status") not in (None, "not_provided"):
+            lines.append(f"Capital-input review: {reviewed['status']}; mappings contain analyst assertions, not machine-verified completeness.")
         capitalization = self.financial_analysis.get("capitalization", {})
         if capitalization:
             missing = ", ".join(capitalization.get("missing_metrics", [])) or "none"
@@ -506,6 +509,12 @@ class ResearchPacket:
                           "Withheld metrics: " + (", ".join(capitalization.get("missing_metrics", [])) or "none") + ".", ""])
             for requirement, satisfied in capitalization.get("market_cap_prerequisites", {}).items():
                 lines.append(f"- {requirement}: {'supported' if satisfied else 'unresolved'}")
+        reviewed = self.financial_analysis.get("reviewed_inputs", {})
+        if reviewed.get("status") not in (None, "not_provided"):
+            lines.extend(["", "## Reviewed capital inputs", "",
+                          f"Review status: **{reviewed['status']}**.",
+                          "Promotions preserve the source quantities and record an analyst's interpretation of their scope. Evidence checks do not independently prove that interpretation.",
+                          "Share-class coverage, ADR conversion and split completeness remain separate requirements."])
         filing_candidates = [fact for fact in self.facts
                              if fact.kind is FactKind.REPORTED and fact.metric.startswith("filing_")]
         if filing_candidates:

@@ -265,3 +265,19 @@ not comprehensive IFRS or investment coverage. Detailed artifacts are under
 `.tradingagents/validation/filing-contexts/`.
 Regression: 739 passed, 2 optional skips, 70 subtests passed; focused rendering
 checks and Ruff also passed.
+
+### Reviewed capital inputs (2026-09-16)
+
+The [reviewed-input layer](reviewed-inputs.md) can copy supported common-share
+counts or copy/sum supported debt quantities under explicit analyst assertions.
+Manifests bind to the exact ticker, cutoff and reported-evidence hash, preserve
+reviewer rationale and source lineage, and reject pending drafts or changed
+evidence. CLI flags generate drafts and apply completed reviews without an LLM
+call or paid feed.
+
+All six cached issuer drafts refused automatic execution. A real FTNT cover-page
+review promoted 733,713,653 common shares; mutating its evidence invalidated the
+review. A synthetic test exercises reviewed debt through net-debt calculation.
+Complete debt scope and class/ADR/split proofs remain separate requirements;
+verified live enterprise values remain unavailable for this sample.
+Regression: 755 passed, 2 optional skips, 70 subtests passed; Ruff passed.

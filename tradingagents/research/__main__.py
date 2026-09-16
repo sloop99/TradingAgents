@@ -56,10 +56,23 @@ def main(argv=None):
                         help="Offline provider response JSON; disables all live providers; repeatable")
     parser.add_argument("--require-sufficient", action="store_true",
                         help="Return exit code 2 if packet coverage is not sufficient")
+    parser.add_argument("--capital-review", type=Path,
+                        help="Apply an explicitly reviewed, evidence-bound capital-input manifest")
+    parser.add_argument("--write-review-draft", action="store_true",
+                        help="Save a pending capital-review-draft.json alongside the packet")
     args = parser.parse_args(argv)
     ticker = args.ticker.strip().upper()
     if not re.fullmatch(r"[A-Z0-9][A-Z0-9.^=-]{0,29}", ticker):
         parser.error("Ticker must be a short symbol, not a path or free-form company name")
+
+    review_manifest = None
+    if args.capital_review:
+        try:
+            review_manifest = json.loads(args.capital_review.read_text(encoding="utf-8"))
+            if not isinstance(review_manifest, dict):
+                raise ValueError("capital review must be a JSON object")
+        except (OSError, ValueError) as exc:
+            parser.error(str(exc))
 
     filing_provider = None
     if args.fixture:
@@ -88,7 +101,8 @@ def main(argv=None):
             yf.set_tz_cache_location(str((args.cache_dir / "yfinance").resolve()))
             providers.append(YahooMarketProvider(cache=cache))
     try:
-        packet = build_packet(ticker, args.as_of, providers, args.horizon, args.thesis)
+        packet = build_packet(ticker, args.as_of, providers, args.horizon, args.thesis,
+                              review_manifest=review_manifest)
     except (ValueError, TypeError) as exc:
         parser.error(str(exc))
     target = args.output_dir or Path(".tradingagents/research") / ticker / args.as_of[:10]
@@ -97,6 +111,13 @@ def main(argv=None):
         json.dumps(packet.to_dict(), indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8"
     )
     (target / "coverage.md").write_text(packet.to_markdown(), encoding="utf-8")
+    if args.write_review_draft:
+        from .reviewed_inputs import draft_review_manifest
+
+        draft = draft_review_manifest(packet.facts, ticker, packet.as_of)
+        (target / "capital-review-draft.json").write_text(
+            json.dumps(draft, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8"
+        )
     if filing_provider is not None:
         (target / "filing-evidence.json").write_text(
             json.dumps(list(filing_provider.responses.values()), indent=2, ensure_ascii=False,
@@ -105,6 +126,11 @@ def main(argv=None):
     print(f"Evidence status: {packet.status.value} (not an investment rating)")
     print(f"Packet: {(target / 'packet.json').resolve()}")
     print(f"Coverage: {(target / 'coverage.md').resolve()}")
+    if args.capital_review:
+        review_status = packet.financial_analysis["reviewed_inputs"]["status"]
+        print(f"Capital-input review: {review_status} (analyst assertions)")
+        if review_status != "applied":
+            return 2
     return 2 if args.require_sufficient and packet.status != "sufficient" else 0
 
 
