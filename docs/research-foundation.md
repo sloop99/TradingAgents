@@ -213,5 +213,18 @@ calculations preserve formula lineage. Equipment-code business classification,
 explicit stale-input warnings, PP&E/productive-assets distinctions and share-basis
 limits prevent unsupported shortcuts. Remaining conflicts and missing inputs are
 still reported. Net debt/enterprise value, comprehensive share reconciliation and
-valuation models are not yet implemented. Local validation artifacts remain under
+valuation models were not implemented in that phase. Local validation artifacts remain under
 `.tradingagents/validation/phase2/`; personal configuration stays outside Git.
+
+### Capitalization implementation (2026-09-16)
+
+[Capitalization and multiples](capitalization.md) now provides a deterministic
+calculator, split reconciliation, explicit readiness requirements and source
+lineage. Yahoo vendor market cap and shares remain separate observations. SEC debt,
+lease, preferred and minority-interest concepts retain their distinct scopes.
+Live snapshots were retrieved for CRWD, FTNT, PANW, JPM, WMT and CAT and combined
+with cached SEC evidence. All six still withhold verified capitalization multiples:
+the built-in providers do not yet supply complete share-class/split/capital-structure
+proofs. The positive arithmetic path is covered by controlled numerical tests.
+Local combined packets are under `.tradingagents/validation/capitalization/`.
+Final regression: 708 passed, 2 optional skips and 70 subtests passed; Ruff passed.

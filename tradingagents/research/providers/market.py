@@ -8,8 +8,10 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 _CACHE_TTL_SECONDS = 3600.0
+_CACHE_SCHEMA_VERSION = "v2"
 _LOOKBACK_DAYS = 400
 _MAX_DAILY_ROWS = 30
+_HISTORY_TIMEOUT_SECONDS = 10
 _SOURCE_URL = "https://finance.yahoo.com/"
 _PUBLICATION_DEFINITION = (
     "Yahoo daily-bar observation; published_at is the first retrieval timestamp "
@@ -95,20 +97,20 @@ class YahooMarketProvider:
                 "retrieved_at": retrieved_at,
                 "lookback_days": _LOOKBACK_DAYS,
                 "daily_rows": 0,
+                "corporate_action_window": "up to 400 calendar days before the cutoff",
             },
         }
 
     def fetch(self, ticker: str, as_of: date | datetime | str) -> dict[str, Any]:
         symbol = str(ticker).strip().upper()
         cutoff = self._as_of_date(as_of)
-        cache_key = f"market:yahoo:{symbol}:{cutoff.isoformat()}"
+        cache_key = f"market:yahoo:{_CACHE_SCHEMA_VERSION}:{symbol}:{cutoff.isoformat()}"
         if self.cache is not None:
             cached = self.cache.get_json(cache_key, max_age_seconds=_CACHE_TTL_SECONDS)
             if isinstance(cached, dict):
                 return cached
 
-        retrieved_at = self._retrieved_at()
-        packet = self._packet(symbol, cutoff, retrieved_at)
+        packet = self._packet(symbol, cutoff, "")
         packet["issues"].append(
             {
                 "code": "MARKET_PUBLICATION_PROXY",
@@ -130,19 +132,30 @@ class YahooMarketProvider:
 
         try:
             ticker_obj = self._factory()(symbol)
+        except Exception as exc:  # constructing a provider handle can also fail
+            packet["issues"].append(
+                {
+                    "code": "MARKET_PROVIDER_ERROR",
+                    "severity": "error",
+                    "message": f"Yahoo market provider unavailable: {type(exc).__name__}: {exc}",
+                }
+            )
+            retrieved_at = self._retrieved_at()
+            packet["metadata"]["retrieved_at"] = retrieved_at
+            if self.cache is not None:
+                self.cache.put_json(cache_key, packet)
+            return packet
+
+        history: Any = None
+        try:
             start = cutoff - timedelta(days=_LOOKBACK_DAYS)
             history = ticker_obj.history(
                 start=start.isoformat(),
                 end=cutoff.isoformat(),
                 auto_adjust=False,
                 actions=True,
+                timeout=_HISTORY_TIMEOUT_SECONDS,
             )
-            facts = self._facts(symbol, history, cutoff, retrieved_at)
-            packet["facts"] = facts
-            packet["metadata"]["daily_rows"] = len(
-                {fact["period_end"] for fact in facts if fact["kind"] == "reported"}
-            )
-            packet["coverage"]["facts"] = "sufficient" if facts else "partial"
         except Exception as exc:  # provider failures are evidence gaps, not crashes
             packet["issues"].append(
                 {
@@ -152,12 +165,74 @@ class YahooMarketProvider:
                 }
             )
 
+        info: dict[str, Any] | None = None
+        try:
+            info = self._info(ticker_obj)
+        except Exception as exc:  # metadata must not discard otherwise usable prices
+            packet["issues"].append(
+                {
+                    "code": "MARKET_METADATA_PROVIDER_ERROR",
+                    "severity": "warning",
+                    "message": f"Yahoo market metadata unavailable: {type(exc).__name__}: {exc}",
+                }
+            )
+
+        # This is the earliest availability time this adapter can establish: both
+        # bounded Yahoo responses have completed.  It is intentionally not an
+        # exchange publication time or a claim about historical availability.
+        retrieved_at = self._retrieved_at()
+        packet["metadata"]["retrieved_at"] = retrieved_at
+        verified_metadata = self._verified_metadata(symbol, info)
+        if info and verified_metadata is None:
+            packet["issues"].append(
+                {
+                    "code": "MARKET_METADATA_IDENTITY_UNVERIFIED",
+                    "severity": "warning",
+                    "message": (
+                        "Yahoo metadata symbol did not match the requested symbol; metadata values "
+                        "were withheld."
+                    ),
+                }
+            )
+        if verified_metadata is not None:
+            self._apply_identity_metadata(packet, verified_metadata)
+
+        currency = self._currency(verified_metadata)
+        facts = self._metadata_facts(symbol, verified_metadata, retrieved_at, currency)
+        if history is not None:
+            facts = self._facts(symbol, history, cutoff, retrieved_at, currency) + facts
+            packet["facts"] = facts
+            packet["metadata"]["daily_rows"] = len(
+                {fact["period_end"] for fact in facts if fact["metric"] in {"close", "close_adjusted"}}
+            )
+            packet["coverage"]["facts"] = "sufficient" if facts else "partial"
+            packet["issues"].append(
+                {
+                    "code": "MARKET_CORPORATE_ACTION_WINDOW_PARTIAL",
+                    "severity": "warning",
+                    "message": (
+                        "Corporate actions are retained from Yahoo's returned 400-day request window; "
+                        "this is not complete corporate-action history or a security master."
+                    ),
+                }
+            )
+        elif facts:
+            packet["facts"] = facts
+            packet["coverage"]["facts"] = "partial"
+
         if self.cache is not None:
             self.cache.put_json(cache_key, packet)
         return packet
 
     @classmethod
-    def _facts(cls, symbol: str, history: Any, cutoff: date, retrieved_at: str) -> list[dict[str, Any]]:
+    def _facts(
+        cls,
+        symbol: str,
+        history: Any,
+        cutoff: date,
+        retrieved_at: str,
+        currency: str | None,
+    ) -> list[dict[str, Any]]:
         rows: list[tuple[date, Any]] = []
         try:
             iterator = history.iterrows()
@@ -168,22 +243,94 @@ class YahooMarketProvider:
             if day is not None and day < cutoff:
                 rows.append((day, row))
         rows.sort(key=lambda item: item[0])
-        rows = rows[-_MAX_DAILY_ROWS:]
+        price_rows = rows[-_MAX_DAILY_ROWS:]
         facts: list[dict[str, Any]] = []
-        for day, row in rows:
+        price_unit = f"{currency}/share" if currency else "native_currency/share"
+        for day, row in price_rows:
             for column, metric, unit, definition in (
-                ("Close", "close", "native_currency/share", "Yahoo daily Close; historical split basis follows the vendor and quote currency is not resolved by this adapter."),
-                ("Adj Close", "close_adjusted", "native_currency/share", "Yahoo split/dividend-adjusted daily close; quote currency is not resolved by this adapter."),
+                ("Close", "close", price_unit, "Yahoo daily Close; historical split basis follows the vendor."),
+                ("Adj Close", "close_adjusted", price_unit, "Yahoo split/dividend-adjusted daily close."),
             ):
                 value = cls._clean_number(cls._column(row, column))
                 if value is not None:
                     facts.append(cls._fact(symbol, metric, value, unit, day, retrieved_at, definition))
+        for day, row in rows:
             split = cls._clean_number(cls._column(row, "Stock Splits"))
             if split not in (None, 0):
-                facts.append(cls._fact(symbol, "split_ratio", split, "ratio", day, retrieved_at, "Yahoo stock split ratio."))
+                facts.append(cls._fact(symbol, "split_ratio", split, "ratio", day, retrieved_at, "Yahoo stock split ratio from the returned vendor history window; absence of a record does not establish that no split occurred."))
             dividend = cls._clean_number(cls._column(row, "Dividends"))
             if dividend not in (None, 0):
-                facts.append(cls._fact(symbol, "dividend_per_share", dividend, "native_currency/share", day, retrieved_at, "Yahoo cash dividend per share; quote currency is not resolved by this adapter."))
+                facts.append(cls._fact(symbol, "dividend_per_share", dividend, price_unit, day, retrieved_at, "Yahoo cash dividend per share from the returned vendor history window."))
+        return facts
+
+    @staticmethod
+    def _info(ticker_obj: Any) -> dict[str, Any]:
+        getter = getattr(ticker_obj, "get_info", None)
+        info = getter() if callable(getter) else ticker_obj.info
+        if not isinstance(info, dict):
+            raise TypeError("Yahoo metadata was not a mapping")
+        return info
+
+    @staticmethod
+    def _verified_metadata(symbol: str, info: dict[str, Any] | None) -> dict[str, Any] | None:
+        if not info:
+            return None
+        returned_symbol = str(info.get("symbol") or "").strip().upper()
+        return info if returned_symbol == symbol else None
+
+    @staticmethod
+    def _currency(info: dict[str, Any] | None) -> str | None:
+        if not info:
+            return None
+        currency = str(info.get("currency") or "").strip()
+        # Do not turn Yahoo quotation labels such as ``GBp`` into an ISO code
+        # (``GBP`` would be a different per-share unit).
+        return currency if len(currency) == 3 and currency.isalpha() and currency.isupper() else None
+
+    @classmethod
+    def _apply_identity_metadata(cls, packet: dict[str, Any], info: dict[str, Any]) -> None:
+        currency = cls._currency(info)
+        if currency:
+            packet["identity"]["currency"] = currency
+        exchange = str(info.get("fullExchangeName") or info.get("exchange") or "").strip()
+        if exchange:
+            packet["identity"]["exchange"] = exchange
+        quote_type = str(info.get("quoteType") or "").strip()
+        if quote_type:
+            packet["metadata"]["quote_type"] = quote_type
+
+    @classmethod
+    def _metadata_facts(
+        cls,
+        symbol: str,
+        info: dict[str, Any] | None,
+        retrieved_at: str,
+        currency: str | None,
+    ) -> list[dict[str, Any]]:
+        if not info:
+            return []
+        try:
+            retrieval_day = datetime.fromisoformat(retrieved_at.replace("Z", "+00:00")).astimezone(timezone.utc).date()
+        except ValueError:
+            return []
+        facts: list[dict[str, Any]] = []
+        for key, metric, unit, definition in (
+            (
+                "marketCap",
+                "market_cap_reported",
+                currency or "native_currency",
+                "Yahoo Finance market-cap vendor snapshot; its methodology, timestamp, and point-in-time availability are not independently verified.",
+            ),
+            (
+                "sharesOutstanding",
+                "shares_outstanding_market",
+                "shares",
+                "Yahoo Finance shares-outstanding vendor snapshot; share classes, split basis, filing reconciliation, and point-in-time availability are unresolved.",
+            ),
+        ):
+            value = cls._clean_number(info.get(key))
+            if value is not None:
+                facts.append(cls._fact(symbol, metric, value, unit, retrieval_day, retrieved_at, definition))
         return facts
 
     @staticmethod

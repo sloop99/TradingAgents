@@ -6,6 +6,7 @@ from collections.abc import Iterable, Mapping
 from datetime import date, datetime, time, timezone
 from typing import Any, Protocol
 
+from .capitalization import analyze_capitalization
 from .checks import classify_business, run_checks
 from .financials import analyze_financials
 from .models import (
@@ -18,6 +19,18 @@ from .models import (
     ResearchPacket,
 )
 from .reconciliation import reconcile_facts
+
+_EXCHANGE_ALIASES = {
+    "nasdaq": "Nasdaq",
+    "nasdaqgs": "Nasdaq",
+    "nasdaqgm": "Nasdaq",
+    "nasdaqcm": "Nasdaq",
+    "nms": "Nasdaq",
+    "ngm": "Nasdaq",
+    "ncm": "Nasdaq",
+    "nyse": "NYSE",
+    "nyq": "NYSE",
+}
 
 
 class ResearchProvider(Protocol):
@@ -206,6 +219,10 @@ def build_packet(
     business_model, _ = classify_business(identity)
     financials = analyze_financials(reconciled.selected_facts, business_model)
     issues.extend(financials.issues)
+    capitalization = analyze_capitalization(
+        reconciled.selected_facts + financials.derived_facts, business_model, normalized_as_of
+    )
+    issues.extend(capitalization.issues)
     stale_inputs = financials.summary.get("stale_inputs", [])
     for stale in stale_inputs:
         issues.append(ResearchIssue(
@@ -229,6 +246,10 @@ def build_packet(
             coverage[area] = provider_status
     status = checked.status
     coverage["financial_calculations"] = "partial" if financials.derived_facts else "unsupported"
+    coverage["capitalization"] = capitalization.summary["status"]
+    if any(fact.metric in {"enterprise_value_to_revenue", "price_to_earnings", "price_to_free_cash_flow"}
+           for fact in capitalization.derived_facts):
+        coverage["valuation"] = "partial"
     if stale_inputs and status is CoverageStatus.SUFFICIENT:
         status = CoverageStatus.PARTIAL
     if any(item["metric"] in {"operating_cash_flow", "capital_expenditures"} for item in stale_inputs):
@@ -249,7 +270,7 @@ def build_packet(
         status=status,
         business_model=checked.business_model,
         identity=identity,
-        facts=facts + financials.derived_facts,
+        facts=facts + financials.derived_facts + capitalization.derived_facts,
         documents=sorted(
             documents,
             key=lambda item: (item.published_at, item.document_id),
@@ -262,6 +283,7 @@ def build_packet(
             "selected_inputs": [fact.to_dict() for fact in reconciled.selected_facts],
             "decisions": reconciled.decisions,
             "summary": financials.summary,
+            "capitalization": capitalization.summary,
         },
     )
 
@@ -307,7 +329,11 @@ def _merge_identities(
         "sic",
         "business_model",
     ):
-        values = {getattr(identity, field) for identity in identities if getattr(identity, field)}
+        values = {
+            _canonical_exchange(getattr(identity, field)) if field == "exchange" else getattr(identity, field)
+            for identity in identities
+            if getattr(identity, field)
+        }
         if len(values) == 1:
             merged[field] = values.pop()
         elif len(values) > 1:
@@ -322,6 +348,12 @@ def _merge_identities(
         else:
             merged[field] = None
     return IssuerIdentity.from_dict(merged), issues
+
+
+def _canonical_exchange(value: str) -> str:
+    """Normalize only documented Yahoo/SEC exchange aliases used by this adapter."""
+    label = str(value).strip()
+    return _EXCHANGE_ALIASES.get(label.casefold(), label)
 
 
 def _dedupe_facts(

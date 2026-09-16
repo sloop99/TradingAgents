@@ -371,3 +371,41 @@ def test_sec_provider_uses_core_coverage_and_metric_names():
     assert {fact.metric for fact in packet.facts} >= {"revenue", "shares_outstanding"}
     assert not [issue for issue in packet.issues if issue.code == "INVALID_PROVIDER_RECORD"]
     assert packet.coverage["point_in_time"] == "partial"
+
+
+@pytest.mark.unit
+def test_sec_capitalization_concepts_keep_exact_reported_scopes_and_absence():
+    source = fixtures()
+    concepts = source[FACTS_URL]["facts"]["us-gaap"]
+    for concept, value in {
+        "ShortTermBorrowings": 11,
+        "CommercialPaper": 12,
+        "LongTermDebt": 90,
+        "FinanceLeaseLiability": 13,
+        "FinanceLeaseLiabilityCurrent": 3,
+        "FinanceLeaseLiabilityNoncurrent": 10,
+        "PreferredStockValue": 14,
+        "PreferredStockLiquidationPreferenceValue": 19,
+        "MinorityInterest": 6,
+        "RedeemableNoncontrollingInterestEquityCarryingAmount": 7,
+    }.items():
+        concepts[concept] = {
+            "label": concept,
+            "description": f"SEC description for {concept}",
+            "units": {"USD": [{"end": "2024-12-31", "val": value, "accn": ACCESSION, "form": "10-K", "filed": "2025-01-30"}]},
+        }
+
+    packet = SecEdgarProvider("Research Test research@example.com", session=FakeSession(source)).fetch("AAPL", "2025-12-31")
+    by_metric = {fact["metric"]: fact for fact in packet["facts"]}
+
+    assert by_metric["long_term_debt_reported"]["value"] == 90
+    assert by_metric["finance_lease_liability"]["value"] == 13
+    assert by_metric["finance_lease_liability_current"]["value"] == 3
+    assert by_metric["finance_lease_liability_noncurrent"]["value"] == 10
+    assert by_metric["preferred_stock_value"]["value"] == 14
+    assert by_metric["preferred_stock_liquidation_preference"]["value"] == 19
+    assert by_metric["noncontrolling_interest_carrying"]["value"] == 6
+    assert by_metric["redeemable_nci_equity_carrying_amount"]["value"] == 7
+    assert "preferred_stock_liquidation_preference" in by_metric
+    assert "cash_including_restricted" not in by_metric
+    assert "long_term_debt_total" not in by_metric

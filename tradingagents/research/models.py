@@ -345,7 +345,10 @@ class ResearchPacket:
             if len(input_ids) != len(set(input_ids)) or set(input_ids) != selected_ids:
                 raise ValueError("Selected input views do not match the selected fact IDs")
             for selected in selected_inputs:
-                if selected != normalize_concept(original_by_id[selected.fact_id]):
+                original = original_by_id[selected.fact_id]
+                # Older packets can retain the exact original provider view.
+                # Neither path permits altered values, dates, or sources.
+                if selected not in (original, normalize_concept(original)):
                     raise ValueError("Selected input view differs from its original source fact")
         return packet
 
@@ -420,6 +423,10 @@ class ResearchPacket:
             lines.append(f"User thesis (unverified): {self.thesis}")
         if self.financial_analysis:
             lines.append("Financial inputs reconciled by concept and period; superseded reported facts remain in the full packet. Calculations do not establish valuation readiness.")
+        capitalization = self.financial_analysis.get("capitalization", {})
+        if capitalization:
+            missing = ", ".join(capitalization.get("missing_metrics", [])) or "none"
+            lines.append(f"Capitalization status: {capitalization.get('status', 'unsupported')}; withheld metrics: {missing}. Vendor market cap is not independently verified.")
         lines.extend(["", "## Eligible facts"])
         for fact in selected:
             period = fact.period_end
@@ -476,7 +483,7 @@ class ResearchPacket:
         if self.financial_analysis:
             lines.extend(["", "## Financial reconciliation", "",
                           f"Selected input facts: {len(self.financial_analysis.get('selected_fact_ids', []))}. All source versions remain below.",
-                          "Calculations are evidence, not a valuation or investment rating.", "",
+                          "Calculated metrics are not a target price or investment rating.", "",
                           "| Calculated metric | Value | Unit | Period | Fact ID |",
                           "|---|---:|---|---|---|"])
             calculated = [fact for fact in self.facts if fact.kind is FactKind.CALCULATED]
@@ -485,6 +492,14 @@ class ResearchPacket:
                 latest[fact.metric] = fact
             for metric, fact in sorted(latest.items()):
                 lines.append(f"| {metric} | {fact.value:,.4f} | {fact.unit} | {fact.period_start or 'instant'} to {fact.period_end} | {fact.fact_id} |")
+        capitalization = self.financial_analysis.get("capitalization", {})
+        if capitalization:
+            lines.extend(["", "## Capitalization readiness", "",
+                          f"Status: **{capitalization.get('status', 'unsupported')}**.",
+                          "Vendor market cap and shares remain observations until independently reconciled.",
+                          "Withheld metrics: " + (", ".join(capitalization.get("missing_metrics", [])) or "none") + ".", ""])
+            for requirement, satisfied in capitalization.get("market_cap_prerequisites", {}).items():
+                lines.append(f"- {requirement}: {'supported' if satisfied else 'unresolved'}")
         lines.extend(["", "## Facts", ""])
         if not self.facts:
             lines.append("No eligible facts were retained.")

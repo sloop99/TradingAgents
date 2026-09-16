@@ -124,3 +124,34 @@ def test_sec_cash_debt_and_equity_are_remapped_without_summing_components():
     }
     assert not result.issues
     assert normalize_concept(old_cached[2]).metric == "long_term_debt_current"
+
+
+@pytest.mark.unit
+def test_sec_capitalization_tags_normalize_without_scope_equivalence_or_synthesis():
+    facts = [
+        fact("st", "legacy", 2, tag="US-GAAP:ShortTermBorrowings", start=None),
+        fact("cp", "legacy", 3, tag="us-gaap:CommercialPaper", start=None),
+        fact("reported", "legacy", 10, tag="us-gaap:LongTermDebt", start=None),
+        fact("lease", "legacy", 4, tag="us-gaap:FinanceLeaseLiability", start=None),
+        fact("lease-current", "legacy", 1, tag="us-gaap:FinanceLeaseLiabilityCurrent", start=None),
+        fact("pref", "legacy", 5, tag="us-gaap:PreferredStockValue", start=None),
+        fact("pref-liquidation", "legacy", 8, tag="us-gaap:PreferredStockLiquidationPreferenceValue", start=None),
+        fact("nci", "legacy", 4, tag="us-gaap:MinorityInterest", start=None),
+        fact("redeemable-nci", "legacy", 6, tag="us-gaap:RedeemableNoncontrollingInterestEquityCarryingAmount", start=None),
+    ]
+    result = reconcile_facts(facts)
+    metrics = {item.metric: item.value for item in result.selected_facts}
+
+    assert metrics == {
+        "short_term_borrowings": 2,
+        "commercial_paper": 3,
+        "long_term_debt_reported": 10,
+        "finance_lease_liability": 4,
+        "finance_lease_liability_current": 1,
+        "preferred_stock_value": 5,
+        "preferred_stock_liquidation_preference": 8,
+        "noncontrolling_interest_carrying": 4,
+        "redeemable_nci_equity_carrying_amount": 6,
+    }
+    assert normalize_concept(facts[2]).metric == "long_term_debt_reported"
+    assert not any(issue.code == "UNIT_CONFLICT" for issue in result.issues)
