@@ -1,0 +1,234 @@
+from __future__ import annotations
+
+from copy import deepcopy
+
+import pytest
+
+from tradingagents.research.engine import build_packet
+from tradingagents.research.providers.sec import SecEdgarProvider
+
+
+class FakeResponse:
+    def __init__(self, payload, status_code=200):
+        self.payload = payload
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def json(self):
+        return deepcopy(self.payload)
+
+
+class FakeSession:
+    def __init__(self, by_url):
+        self.by_url = by_url
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return FakeResponse(self.by_url[url])
+
+
+class MemoryCache:
+    def __init__(self):
+        self.values = {}
+        self.puts = []
+
+    def get_json(self, key, max_age_seconds=None):
+        return deepcopy(self.values.get(key))
+
+    def put_json(self, key, payload):
+        self.puts.append((key, deepcopy(payload)))
+        self.values[key] = deepcopy(payload)
+        return f"digest-{len(self.puts)}"
+
+
+CIK = "0000320193"
+ACCESSION = "0000320193-25-000001"
+AMENDMENT = "0000320193-25-000002"
+LATE_ACCESSION = "0000320193-26-000003"
+TICKERS_URL = "https://www.sec.gov/files/company_tickers_exchange.json"
+SUBMISSIONS_URL = f"https://data.sec.gov/submissions/CIK{CIK}.json"
+FACTS_URL = f"https://data.sec.gov/api/xbrl/companyfacts/CIK{CIK}.json"
+
+
+def fixtures():
+    return {
+        TICKERS_URL: {
+            "fields": ["cik", "name", "ticker", "exchange"],
+            "data": [[320193, "APPLE INC", "AAPL", "Nasdaq"]],
+        },
+        SUBMISSIONS_URL: {
+            "name": "Apple Inc.",
+            "tickers": ["AAPL"],
+            "exchanges": ["Nasdaq"],
+            "sic": "3571",
+            "fiscalYearEnd": "0928",
+            "filings": {
+                "recent": {
+                    "accessionNumber": [ACCESSION, AMENDMENT, LATE_ACCESSION],
+                    "form": ["10-K", "10-K/A", "10-Q"],
+                    "filingDate": ["2025-01-30", "2025-02-01", "2026-01-30"],
+                    "acceptanceDateTime": ["20250130123000", "20250201123000", "20260130123000"],
+                    "reportDate": ["2024-12-31", "2024-12-31", "2025-12-31"],
+                    "primaryDocument": ["annual.htm", "amendment.htm", "quarter.htm"],
+                }
+            },
+        },
+        FACTS_URL: {
+            "cik": CIK,
+            "facts": {
+                "us-gaap": {
+                    "RevenueFromContractWithCustomerExcludingAssessedTax": {
+                        "label": "Revenue from contracts",
+                        "units": {
+                            "USD": [
+                                {
+                                    "start": "2024-01-01",
+                                    "end": "2024-12-31",
+                                    "val": 100,
+                                    "accn": ACCESSION,
+                                    "form": "10-K",
+                                    "filed": "2025-01-30",
+                                },
+                                {
+                                    "start": "2024-01-01",
+                                    "end": "2024-12-31",
+                                    "val": 101,
+                                    "accn": AMENDMENT,
+                                    "form": "10-K/A",
+                                    "filed": "2025-02-01",
+                                },
+                                {
+                                    "start": "2025-01-01",
+                                    "end": "2025-12-31",
+                                    "val": 200,
+                                    "accn": LATE_ACCESSION,
+                                    "form": "10-Q",
+                                    "filed": "2026-01-30",
+                                },
+                            ]
+                        },
+                    },
+                    "LongTermDebtCurrent": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "end": "2024-12-31",
+                                    "val": 10,
+                                    "accn": ACCESSION,
+                                    "form": "10-K",
+                                    "filed": "2025-01-30",
+                                }
+                            ]
+                        }
+                    },
+                    "LongTermDebtNoncurrent": {
+                        "units": {
+                            "USD": [
+                                {
+                                    "end": "2024-12-31",
+                                    "val": 90,
+                                    "accn": ACCESSION,
+                                    "form": "10-K",
+                                    "filed": "2025-01-30",
+                                }
+                            ]
+                        }
+                    },
+                },
+                "dei": {
+                    "EntityCommonStockSharesOutstanding": {
+                        "units": {
+                            "shares": [
+                                {
+                                    "end": "2024-12-31",
+                                    "val": 15,
+                                    "accn": ACCESSION,
+                                    "form": "10-K",
+                                    "filed": "2025-01-30",
+                                }
+                            ]
+                        }
+                    }
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.unit
+def test_sec_provider_preserves_sources_periods_and_concept_conflicts():
+    session = FakeSession(fixtures())
+    packet = SecEdgarProvider("Research Test research@example.com", session=session).fetch("aapl", "2025-12-31")
+
+    assert packet["identity"] == {
+        "ticker": "AAPL",
+        "cik": CIK,
+        "name": "Apple Inc.",
+        "exchange": "Nasdaq",
+        "fiscal_year_end": "0928",
+        "sic": "3571",
+    }
+    assert [document["form"] for document in packet["documents"]] == ["10-K"]
+    assert packet["documents"][0]["source_url"].endswith(f"/{ACCESSION.replace('-', '')}/{ACCESSION}-index.html")
+    revenue = [fact for fact in packet["facts"] if fact["metric"] == "revenue"]
+    assert len(revenue) == 1
+    assert revenue[0]["value"] == 100
+    assert revenue[0]["period_start"] == "2024-01-01"
+    assert revenue[0]["published_at"] == "2025-01-30T12:30:00Z"
+    assert revenue[0]["retrieved_at"].endswith("Z")
+    assert revenue[0]["source_tag"] == "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"
+    debt = [fact for fact in packet["facts"] if fact["metric"] == "debt"]
+    assert {fact["value"] for fact in debt} == {10, 90}
+    assert all(fact["adjustment_basis"] == "as_reported" and fact["kind"] == "reported" for fact in packet["facts"])
+    assert packet["coverage"]["ticker_history"] == "partial"
+
+
+@pytest.mark.unit
+def test_sec_provider_cache_uses_immutable_snapshot_and_latest_pointer():
+    cache = MemoryCache()
+    session = FakeSession(fixtures())
+    provider = SecEdgarProvider("Research Test research@example.com", cache=cache, session=session)
+    provider.fetch("AAPL", "2025-12-31")
+    first_call_count = len(session.calls)
+    provider.fetch("AAPL", "2025-12-31")
+
+    assert first_call_count == 3
+    assert len(session.calls) == first_call_count
+    keys = [key for key, _ in cache.puts]
+    assert any(key.startswith("sec:snapshot:") for key in keys)
+    assert any(key.startswith("sec:latest:") for key in keys)
+    snapshots = [payload for key, payload in cache.puts if key.startswith("sec:snapshot:")]
+    assert all({"retrieved_at", "url", "payload"} <= snapshot.keys() for snapshot in snapshots)
+
+
+@pytest.mark.unit
+def test_missing_user_agent_and_unresolved_ticker_stop_before_follow_on_requests():
+    no_agent_session = FakeSession(fixtures())
+    no_agent = SecEdgarProvider("", session=no_agent_session).fetch("AAPL", "2025-12-31")
+    assert no_agent_session.calls == []
+    assert no_agent["issues"][0]["code"] == "SEC_USER_AGENT_REQUIRED"
+    assert no_agent["coverage"]["identity"].startswith("unsupported")
+
+    unresolved_fixtures = fixtures()
+    unresolved_fixtures[TICKERS_URL]["data"] = [[999, "Other", "OTHER", "NYSE"]]
+    unresolved_fixtures["https://www.sec.gov/files/company_tickers.json"] = {}
+    unresolved_session = FakeSession(unresolved_fixtures)
+    unresolved = SecEdgarProvider("Research Test research@example.com", session=unresolved_session).fetch("MISS", "2025-12-31")
+    assert len(unresolved_session.calls) == 2
+    assert unresolved["identity"] == {"ticker": "MISS"}
+    assert unresolved["issues"][0]["code"] == "unsupported_ticker"
+    assert unresolved["coverage"]["documents"] == "unsupported"
+
+
+@pytest.mark.unit
+def test_sec_provider_uses_core_coverage_and_metric_names():
+    provider = SecEdgarProvider("Research Test research@example.com", session=FakeSession(fixtures()))
+    packet = build_packet("AAPL", "2025-12-31", [provider])
+
+    assert {fact.metric for fact in packet.facts} >= {"revenue", "shares_outstanding"}
+    assert not [issue for issue in packet.issues if issue.code == "INVALID_PROVIDER_RECORD"]
+    assert packet.coverage["point_in_time"] == "partial"

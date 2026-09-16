@@ -139,6 +139,8 @@ class TradingAgentsGraph:
 
         # State tracking
         self.curr_state = None
+        self._research_packet = None
+        self._research_packet_digest = ""
         self.ticker = None
         self.log_states_dict = {}  # date to full state dict
 
@@ -352,12 +354,16 @@ class TradingAgentsGraph:
         selection, debate/risk depth, or asset mode starts fresh instead of
         silently continuing the previous graph (#1089).
         """
-        return "|".join([
+        parts = [
             "analysts=" + ",".join(self.selected_analysts),
             f"debate={self.config['max_debate_rounds']}",
             f"risk={self.config['max_risk_discuss_rounds']}",
             f"asset={asset_type}",
-        ])
+        ]
+        digest = getattr(self, "_research_packet_digest", "")
+        if digest:
+            parts.append(f"evidence={digest}")
+        return "|".join(parts)
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock"):
         """Run the trading agents graph for a company on a specific date.
@@ -370,6 +376,18 @@ class TradingAgentsGraph:
         successful node on a subsequent invocation with the same ticker+date.
         """
         self.ticker = company_name
+
+        self._research_packet = None
+        self._research_packet_digest = ""
+        packet_path = self.config.get("research_packet_path")
+        if packet_path:
+            if asset_type != "stock":
+                raise ValueError("Equity research packets require asset_type='stock'")
+            from tradingagents.research.integration import load_packet
+
+            self._research_packet, self._research_packet_digest = load_packet(
+                packet_path, company_name, str(trade_date)
+            )
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(company_name)
@@ -422,6 +440,9 @@ class TradingAgentsGraph:
         # deterministically resolved instrument identity for all agents.
         past_context = self.memory_log.get_past_context(company_name)
         instrument_context = self.resolve_instrument_context(company_name, asset_type)
+        packet = getattr(self, "_research_packet", None)
+        if packet is not None:
+            instrument_context += "\n\n" + packet.render_context()
         init_agent_state = self.propagator.create_initial_state(
             company_name,
             trade_date,
@@ -430,6 +451,9 @@ class TradingAgentsGraph:
             instrument_context=instrument_context,
         )
         args = self.propagator.get_graph_args()
+        if packet is not None:
+            init_agent_state["research_packet"] = packet.to_dict()
+            init_agent_state["evidence_status"] = packet.status.value
 
         # Inject thread_id so same ticker+date+graph-shape resumes; a different
         # date or graph shape starts fresh (#1089).
@@ -450,7 +474,7 @@ class TradingAgentsGraph:
                     if signature != last_printed:
                         msg.pretty_print()
                         last_printed = signature
-                    trace.append(chunk)
+                trace.append(chunk)
             # Streamed chunks are per-node deltas. Merge them so the returned
             # state matches what graph.invoke() yields in the non-debug path.
             final_state = {}
@@ -458,6 +482,11 @@ class TradingAgentsGraph:
                 final_state.update(chunk)
         else:
             final_state = self.graph.invoke(init_agent_state, **args)
+
+        # Streamed node deltas need not repeat unchanged evidence state.
+        if packet is not None:
+            final_state["research_packet"] = packet.to_dict()
+            final_state["evidence_status"] = packet.status.value
 
         # Store current state for reflection.
         self.curr_state = final_state

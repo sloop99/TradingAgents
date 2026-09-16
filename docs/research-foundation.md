@@ -1,6 +1,6 @@
 # Research foundation roadmap
 
-Status: design and existing local customizations preserved; Phase 1 implementation has not started.
+Status: Phase 1 evidence foundation implemented on `research-foundation`; validation and review remain separate from merging into main.
 
 ## Scope
 
@@ -93,3 +93,87 @@ library includes free access to all underlying data.
 The initial branch preserves pre-existing Codex subscription-provider integration
 and FRED/Reddit retrieval fixes. These are baseline capabilities, not implementation
 of the new evidence foundation. Personal holdings and generated research remain local.
+
+## Phase 1 usage
+
+Generate a packet without an LLM call or paid data subscription:
+
+```powershell
+$env:SEC_USER_AGENT = "YourOrganization your-contact@example.com"
+python -m tradingagents.research AAPL --as-of 2026-09-16
+```
+
+Replace the example SEC contact with your own identifying contact. Missing SEC
+configuration produces an explicit coverage issue and skips SEC requests. Yahoo
+is optional (`--no-market`). Output defaults to
+`.tradingagents/research/AAPL/2026-09-16/packet.json` and `coverage.md`.
+Use `--output-dir` to preserve separate runs on the same date. Raw response
+snapshots are content-addressed under `.tradingagents/evidence-cache`.
+A date means end of day UTC; an aware ISO timestamp selects an exact cutoff.
+`--horizon` and `--thesis` preserve research intent without creating forecasts.
+`--require-sufficient` writes the packet and exits 2 when coverage is insufficient.
+`--fixture provider-response.json` disables all network providers for offline replay.
+
+Attach the same packet to every agent in a programmatic stock run:
+
+```python
+from tradingagents.default_config import DEFAULT_CONFIG
+from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+config = DEFAULT_CONFIG.copy()
+config["research_packet_path"] = ".tradingagents/research/AAPL/2026-09-16/packet.json"
+graph = TradingAgentsGraph(config=config)
+state, decision = graph.propagate("AAPL", "2026-09-16")
+graph.save_reports(state, "AAPL")
+```
+
+The graph rejects mismatched ticker/date packets before analysis. Packet content
+changes invalidate checkpoint reuse. Reports retain the full packet and coverage
+under `0_evidence/`. The bounded shared context links facts to their sources;
+evidence status is separate from BUY/HOLD/SELL. Existing behavior remains the
+default when `research_packet_path` is unset. The interactive CLI does not yet
+expose a packet-selection option; use the programmatic `propagate` route above.
+
+### Actual coverage and limits
+
+- SEC: current issuer lookup, recent filing metadata, and selected standardized
+  companyfacts concepts with exact periods, units, tags and accessions. This is
+  not full filing-text or earnings-call extraction. Custom company KPIs, analyst
+  consensus, customer research and valuation models remain later phases.
+- Current ticker identity is not a historical security master. Historical
+  eligibility uses acceptance times where available; a filing-date fallback is
+  conservatively end of day and flagged. Amendments are excluded. Current SEC
+  responses are not a complete archive of historically retrieved data vintages.
+- Yahoo: recent completed daily closes and available corporate actions. Retrieval
+  time is the earliest verified availability proxy, not an exchange publication
+  time. Retrospective cutoffs exclude newly retrieved prices. The history-only
+  feed does not resolve quote currency; it never silently assumes USD.
+- SIC-based business classification selects basic coverage checks for banks,
+  REITs, retail, industrial, software and general companies. It is coarse and
+  does not establish a company's actual economics or specialized valuation.
+- Compatible operating cash flow less explicitly positive-outflow capex can be
+  calculated with input lineage. No TTM stitching, enterprise value, split-adjusted
+  cost-basis return, target price, DCF or sector rotation is claimed in this phase.
+- The packet's cutoff constrains its evidence only. Legacy tools may retrieve
+  newer data during an agent run; the combined report is not a historical
+  backtesting guarantee. Agent calls still carry their normal provider costs.
+
+The next build should reconcile fiscal periods and share/capitalization inputs,
+then add deterministic TTM metrics and business-appropriate valuation methods.
+
+### Validation of the initial implementation
+
+- Full local suite: 633 passed, 2 skipped, 70 subtests passed. Skips are the
+  optional Bedrock dependency and a live DeepSeek API test without credentials.
+- Ruff passes for all Phase 1 source/tests and modified integration files.
+- Offline fixtures cover multiple business types, date eligibility, invalid and
+  conflicting facts, cache corruption recovery, provider integration, report
+  persistence, and packet-aware checkpoint signatures.
+- Normal and debug graph integration are exercised without paid model calls;
+  debug streams now retain node output even when no message accompanies it.
+- A live SEC request with a truthful public-project User-Agent returned HTTP 403
+  at issuer mapping. Live SEC data retrieval therefore remains unverified in
+  this environment. No private contact was invented or access block bypassed.
+- The standalone CLI was smoke-tested with missing SEC configuration and emits
+  an unsupported evidence packet successfully. Live Yahoo retrieval and a full
+  LLM-backed research run were not exercised as part of this build.

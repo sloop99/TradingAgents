@@ -6,6 +6,7 @@ CLI and ``TradingAgentsGraph.save_reports`` both call this, so a headless / API
 run produces the same on-disk report tree a CLI run does.
 """
 
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -15,6 +16,26 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
     save_path = Path(save_path)
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
+    if final_state.get("research_packet"):
+        from tradingagents.research.models import ResearchPacket
+
+        packet = ResearchPacket.from_dict(final_state["research_packet"])
+        evidence_dir = save_path / "0_evidence"
+        evidence_dir.mkdir(exist_ok=True)
+        (evidence_dir / "packet.json").write_text(
+            json.dumps(packet.to_dict(), indent=2, ensure_ascii=False, allow_nan=False),
+            encoding="utf-8",
+        )
+        (evidence_dir / "coverage.md").write_text(packet.to_markdown(), encoding="utf-8")
+        sections.append(
+            "## Research evidence coverage\n\n"
+            f"Status: **{packet.status.value}**. This is separate from the investment rating. "
+            "Missing evidence does not establish Hold.\n\n"
+            "[Full evidence and coverage](0_evidence/coverage.md) | "
+            "[Structured packet](0_evidence/packet.json)\n\n"
+            "The packet cutoff applies to its own evidence. Other legacy analyst tools "
+            "may retrieve newer information; this is not a point-in-time backtest guarantee."
+        )
 
     # 1. Analysts
     analysts_dir = save_path / "1_analysts"
