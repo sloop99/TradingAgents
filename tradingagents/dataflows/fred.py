@@ -10,6 +10,7 @@ the routing layer treats it as "unavailable" rather than a hard crash.
 """
 import logging
 import os
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -23,6 +24,8 @@ FRED_API_BASE = "https://api.stlouisfed.org/fred"
 # Network timeout (seconds) so a stalled request can't hang the agents,
 # mirroring the Alpha Vantage client.
 REQUEST_TIMEOUT = 30
+REQUEST_ATTEMPTS = 3
+TRANSIENT_STATUS_CODES = {429, 500, 502, 503, 504}
 
 # Default trailing window when the caller does not specify one. A year captures
 # the trend and the year-over-year base for most monthly/quarterly series.
@@ -116,21 +119,50 @@ def _resolve_series_id(indicator: str) -> str:
 
 
 def _request(path: str, params: dict) -> dict:
-    """GET a FRED endpoint, surfacing FRED's JSON error body on a bad request."""
+    """GET FRED with transient retries and credential-safe error messages."""
     api_params = {**params, "api_key": get_api_key(), "file_type": "json"}
-    response = requests.get(
-        f"{FRED_API_BASE}/{path}", params=api_params, timeout=REQUEST_TIMEOUT
-    )
+    response = None
+    for attempt in range(REQUEST_ATTEMPTS):
+        try:
+            response = requests.get(
+                f"{FRED_API_BASE}/{path}",
+                params=api_params,
+                timeout=REQUEST_TIMEOUT,
+            )
+        except requests.RequestException as exc:
+            if attempt + 1 < REQUEST_ATTEMPTS:
+                time.sleep(2**attempt)
+                continue
+            # Do not include ``str(exc)``: Requests commonly embeds the full
+            # URL, including the FRED API key, in exception messages.
+            raise RuntimeError(
+                f"FRED request failed after {REQUEST_ATTEMPTS} attempts "
+                f"({type(exc).__name__})"
+            ) from None
+
+        if (
+            response.status_code in TRANSIENT_STATUS_CODES
+            and attempt + 1 < REQUEST_ATTEMPTS
+        ):
+            time.sleep(2**attempt)
+            continue
+        break
+
+    assert response is not None
     # FRED returns 400 with a JSON {"error_message": ...} for unknown series IDs
     # or malformed params; turn that into a clear, actionable error.
     if response.status_code == 400:
         try:
-            message = response.json().get("error_message", response.text)
+            message = response.json().get("error_message", "invalid request")
         except ValueError:
-            message = response.text
+            message = "invalid request"
         raise ValueError(f"FRED request failed: {message}")
-    response.raise_for_status()
-    return response.json()
+    if response.status_code >= 400:
+        raise RuntimeError(f"FRED request failed with HTTP {response.status_code}")
+    try:
+        return response.json()
+    except ValueError:
+        raise RuntimeError("FRED returned an invalid JSON response") from None
 
 
 def get_macro_data(

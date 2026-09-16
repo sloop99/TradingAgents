@@ -18,6 +18,8 @@ PROVIDER_API_KEY_ENV: dict[str, str | None] = {
     "azure":      "AZURE_OPENAI_API_KEY",
     # Bedrock authenticates via the AWS credential chain, not a single key env.
     "bedrock":    None,
+    # Uses the Codex CLI's cached ChatGPT OAuth session, not an API key.
+    "codex_subscription": None,
     "xai":        "XAI_API_KEY",
     "deepseek":   "DEEPSEEK_API_KEY",
     # Dual-region providers each carry their own account; keys are not

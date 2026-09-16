@@ -79,6 +79,10 @@ _MINIMAX_MODELS: dict[str, list[ModelOption]] = {
 
 
 MODEL_OPTIONS: ProviderModeOptions = {
+    "codex_subscription": {
+        "quick": [("Codex subscription default", "default")],
+        "deep": [("Codex subscription default", "default")],
+    },
     "openai": {
         "quick": [
             ("GPT-5.4 Mini - Fast, strong coding and tool use", "gpt-5.4-mini"),

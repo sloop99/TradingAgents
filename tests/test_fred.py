@@ -88,6 +88,40 @@ class FredConfigTests(unittest.TestCase):
 
 
 @pytest.mark.unit
+class FredRequestTests(unittest.TestCase):
+    @staticmethod
+    def _response(status, payload=None):
+        response = mock.Mock()
+        response.status_code = status
+        response.json.return_value = payload or {}
+        return response
+
+    def test_transient_502_retries_then_succeeds(self):
+        responses = [
+            self._response(502),
+            self._response(502),
+            self._response(200, {"seriess": []}),
+        ]
+        with mock.patch.dict("os.environ", {"FRED_API_KEY": "secret-test-key"}), \
+                mock.patch.object(fred.requests, "get", side_effect=responses) as get, \
+                mock.patch.object(fred.time, "sleep") as sleep:
+            result = fred._request("series", {"series_id": "UNRATE"})
+        self.assertEqual(result, {"seriess": []})
+        self.assertEqual(get.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_failed_request_never_exposes_api_key(self):
+        response = self._response(502)
+        with mock.patch.dict("os.environ", {"FRED_API_KEY": "secret-test-key"}), \
+                mock.patch.object(fred.requests, "get", return_value=response), \
+                mock.patch.object(fred.time, "sleep"), \
+                self.assertRaises(RuntimeError) as raised:
+            fred._request("series", {"series_id": "UNRATE"})
+        self.assertNotIn("secret-test-key", str(raised.exception))
+        self.assertEqual(str(raised.exception), "FRED request failed with HTTP 502")
+
+
+@pytest.mark.unit
 class FredFormattingTests(unittest.TestCase):
     def test_report_has_header_latest_change_and_table(self):
         with mock.patch.object(fred, "_request", side_effect=_request_stub()):

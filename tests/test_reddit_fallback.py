@@ -15,6 +15,7 @@ _SAMPLE_ATOM = """<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
   <entry>
     <title>NVDA earnings beat, stock pops</title>
+    <link href="https://www.reddit.com/r/stocks/comments/abc123/example/" />
     <published>2026-05-20T14:30:00+00:00</published>
     <content type="html">&lt;!-- SC_OFF --&gt;&lt;div class="md"&gt;&lt;p&gt;Great &lt;b&gt;quarter&lt;/b&gt; for NVDA&amp;#39;s datacenter unit.&lt;/p&gt;&lt;/div&gt;&lt;!-- SC_ON --&gt;</content>
   </entry>
@@ -83,11 +84,13 @@ class TestRssParsing:
         assert posts[0]["score"] is None
         assert posts[0]["num_comments"] is None
         assert posts[0]["created_utc"] > 0
+        assert posts[0]["subreddit"] == "stocks"
         assert "datacenter unit" in posts[0]["selftext"]
 
     def test_malformed_xml_fails_open(self):
         with patch.object(reddit, "urlopen", return_value=_resp(lambda: b"<<not xml>>")):
-            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) == []
+            posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        assert posts[0]["_unavailable"] == "ParseError"
 
 
 @pytest.mark.unit
@@ -138,7 +141,7 @@ class TestRss429Backoff:
              patch.object(reddit.time, "sleep"):
             posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
         assert op.call_count == 2          # one retry, then gives up cleanly
-        assert posts == []
+        assert posts[0]["_unavailable"] == "rate limited (HTTP 429)"
 
     def test_retry_after_header_is_honoured(self):
         err = HTTPError("url", 429, "Too Many Requests", {"Retry-After": "12"}, None)
@@ -153,9 +156,10 @@ class TestChunkedTransferErrorsHandled:
     """IncompleteRead/RemoteDisconnected come from http.client and are NOT
     OSErrors, so they were previously uncaught and crashed the pipeline (#1024)."""
 
-    def test_rss_incomplete_read_degrades_to_empty(self):
+    def test_rss_incomplete_read_degrades_to_unavailable(self):
         with patch.object(reddit, "urlopen", return_value=_raise(http.client.IncompleteRead(b""))):
-            assert reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0) == []
+            posts = reddit._fetch_subreddit_rss("NVDA", "stocks", 5, 5.0)
+        assert posts[0]["_unavailable"] == "IncompleteRead"
 
     def test_json_incomplete_read_falls_back_to_rss(self):
         with patch.object(reddit, "urlopen", return_value=_raise(http.client.IncompleteRead(b""))), \
@@ -178,6 +182,35 @@ class TestFormatterHandlesRssPosts:
         assert "↑" not in out  # no fake score arrow
         assert "NVDA pops" in out
         assert "great quarter" in out
+
+    def test_combines_subreddits_into_one_request(self):
+        rss_posts = [{
+            "title": "NVDA pops", "score": None, "num_comments": None,
+            "created_utc": reddit._iso_to_timestamp("2026-05-20T14:30:00Z"),
+            "selftext": "", "source": "rss", "subreddit": "stocks",
+        }]
+        with patch.object(reddit, "_fetch_subreddit", return_value=rss_posts) as fetch:
+            out = reddit.fetch_reddit_posts(
+                "NVDA",
+                subreddits=("wallstreetbets", "stocks", "investing"),
+                limit_per_sub=5,
+            )
+        fetch.assert_called_once_with(
+            "NVDA", "wallstreetbets+stocks+investing", 15, 10.0
+        )
+        assert "Combined Reddit search" in out
+        assert "r/stocks" in out
+
+    def test_rate_limit_is_unavailable_not_no_posts(self):
+        with patch.object(
+            reddit,
+            "_fetch_subreddit",
+            return_value=[{"_unavailable": "rate limited (HTTP 429)"}],
+        ):
+            out = reddit.fetch_reddit_posts("NVDA")
+        assert "Reddit unavailable" in out
+        assert "could not verify" in out
+        assert "no Reddit posts" not in out
 
     def test_json_posts_still_show_counts(self):
         json_posts = [{

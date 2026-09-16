@@ -1,7 +1,9 @@
 """Reddit search fetcher for ticker-specific discussion posts.
 
 Default path is Reddit's public Atom/RSS search feed
-(``reddit.com/r/{sub}/search.rss``). The richer JSON search endpoint
+(``reddit.com/r/{sub}/search.rss``). Multiple configured communities are
+queried through one combined ``r/foo+bar`` feed, reducing request volume and
+the chance of a per-IP ``429``. The richer JSON search endpoint
 (``/search.json``) is reliably WAF-blocked (``HTTP 403``) for public clients
 (issue #862), and probing it on every call only doubled our request volume
 against Reddit's per-IP rate limit — tripping ``429`` on the RSS fallback — so
@@ -11,8 +13,8 @@ posts are marked and the formatter omits the metrics rather than printing fake
 zeros.
 
 No API key required. Returns formatted plaintext blocks ready for prompt
-injection and degrades gracefully — returns a placeholder string rather than
-raising, so callers never special-case missing data.
+injection and degrades gracefully. Fetch failures are explicitly marked
+``<unavailable>`` rather than being misreported as an absence of discussion.
 """
 
 from __future__ import annotations
@@ -47,6 +49,11 @@ _ATOM_NS = {"atom": "http://www.w3.org/2005/Atom"}
 # discussion. wallstreetbets has the most volume but most noise; stocks /
 # investing trend more measured. Caller can override.
 DEFAULT_SUBREDDITS = ("wallstreetbets", "stocks", "investing")
+
+
+def _unavailable(reason: str) -> list[dict]:
+    """Represent a failed fetch without conflating it with zero matching posts."""
+    return [{"_unavailable": reason}]
 
 
 def _search_qs(ticker: str, limit: int) -> str:
@@ -119,18 +126,22 @@ def _fetch_subreddit_rss(
             time.sleep(wait)
             return _fetch_subreddit_rss(ticker, sub, limit, timeout, _retry=False)
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
+        reason = "rate limited (HTTP 429)" if exc.code == 429 else f"HTTP {exc.code}"
+        return _unavailable(reason)
     except (OSError, http.client.HTTPException, ET.ParseError) as exc:
         # OSError covers URLError/TimeoutError/connection resets; HTTPException
         # covers chunked-transfer errors (IncompleteRead/BadStatusLine, #1024).
         logger.warning("Reddit RSS fetch failed for r/%s · %s: %s", sub, ticker, exc)
-        return []
+        return _unavailable(type(exc).__name__)
 
     posts = []
     for entry in root.findall("atom:entry", _ATOM_NS)[:limit]:
         title_el = entry.find("atom:title", _ATOM_NS)
         published_el = entry.find("atom:published", _ATOM_NS)
         content_el = entry.find("atom:content", _ATOM_NS)
+        link_el = entry.find("atom:link", _ATOM_NS)
+        href = link_el.get("href", "") if link_el is not None else ""
+        subreddit_match = re.search(r"/r/([^/]+)/", href, flags=re.IGNORECASE)
         posts.append({
             "title": (title_el.text if title_el is not None else "") or "",
             "score": None,
@@ -140,6 +151,7 @@ def _fetch_subreddit_rss(
             ),
             "selftext": _strip_html(content_el.text if content_el is not None else ""),
             "source": "rss",
+            "subreddit": subreddit_match.group(1) if subreddit_match else None,
         })
     return posts
 
@@ -198,53 +210,55 @@ def fetch_reddit_posts(
     """Fetch recent Reddit posts mentioning ``ticker`` across finance
     subreddits and return them as a formatted plaintext block.
 
-    ``inter_request_delay`` paces the (now RSS-only) per-subreddit requests to
-    stay under Reddit's public per-IP rate limit; combined with the RSS-first
-    path it makes 429s rare even when several analyses run back-to-back.
+    All communities are searched in one combined RSS request. The retained
+    ``inter_request_delay`` parameter is accepted for backwards compatibility
+    but is no longer needed because there is no per-subreddit request loop.
     """
     # Crypto reaches us as a Yahoo pair (BTC-USD); search Reddit for the base
     # ("BTC") so the query actually matches discussion instead of near-nothing.
     ticker = crypto_base(ticker) or ticker
-    blocks = []
-    total_posts = 0
-    for i, sub in enumerate(subreddits):
-        if i > 0:
-            time.sleep(inter_request_delay)
-        posts = _fetch_subreddit(ticker, sub, limit_per_sub, timeout)
-        total_posts += len(posts)
-        if not posts:
-            blocks.append(f"r/{sub}: <no posts found mentioning {ticker.upper()} in the past 7 days>")
-            continue
+    del inter_request_delay
+    subreddits = tuple(subreddits)
+    if not subreddits:
+        return "<Reddit unavailable: no subreddits configured>"
 
-        via_rss = any(p.get("source") == "rss" for p in posts)
-        header = f"r/{sub} — {len(posts)} recent posts mentioning {ticker.upper()}"
-        header += " (via RSS feed; scores/comments unavailable):" if via_rss else ":"
-        lines = [header]
-        for p in posts:
-            title = (p.get("title") or "").replace("\n", " ").strip()
-            score = p.get("score")
-            comments = p.get("num_comments")
-            created = p.get("created_utc")
-            created_str = (
-                time.strftime("%Y-%m-%d", time.gmtime(created)) if created else "?"
-            )
-            # Score / comment counts are absent on the RSS fallback path —
-            # show them only when present rather than printing fake zeros.
-            meta = created_str
-            if score is not None and comments is not None:
-                meta += f" · {score:>4}↑ · {comments:>3}c"
-            selftext = (p.get("selftext") or "").replace("\n", " ").strip()
-            if len(selftext) > 240:
-                selftext = selftext[:240] + "…"
-            lines.append(
-                f"  [{meta}] {title}"
-                + (f"\n    body excerpt: {selftext}" if selftext else "")
-            )
-        blocks.append("\n".join(lines))
-
-    if total_posts == 0:
+    combined = "+".join(subreddits)
+    combined_limit = min(100, max(1, limit_per_sub * len(subreddits)))
+    posts = _fetch_subreddit(ticker, combined, combined_limit, timeout)
+    if posts and posts[0].get("_unavailable"):
+        return (
+            f"<Reddit unavailable: {posts[0]['_unavailable']}; could not verify "
+            f"discussion of {ticker.upper()} across "
+            f"{', '.join(f'r/{s}' for s in subreddits)}>"
+        )
+    if not posts:
         return (
             f"<no Reddit posts found mentioning {ticker.upper()} across "
             f"{', '.join(f'r/{s}' for s in subreddits)} in the past 7 days>"
         )
-    return "\n\n".join(blocks)
+
+    via_rss = any(post.get("source") == "rss" for post in posts)
+    header = (
+        f"Combined Reddit search across {', '.join(f'r/{s}' for s in subreddits)} "
+        f"— {len(posts)} recent posts mentioning {ticker.upper()}"
+    )
+    header += " (via RSS feed; scores/comments unavailable):" if via_rss else ":"
+    lines = [header]
+    for post in posts:
+        title = (post.get("title") or "").replace("\n", " ").strip()
+        score = post.get("score")
+        comments = post.get("num_comments")
+        created = post.get("created_utc")
+        created_str = time.strftime("%Y-%m-%d", time.gmtime(created)) if created else "?"
+        subreddit = post.get("subreddit")
+        meta = f"r/{subreddit} · {created_str}" if subreddit else created_str
+        if score is not None and comments is not None:
+            meta += f" · {score:>4}↑ · {comments:>3}c"
+        selftext = (post.get("selftext") or "").replace("\n", " ").strip()
+        if len(selftext) > 240:
+            selftext = selftext[:240] + "…"
+        lines.append(
+            f"  [{meta}] {title}"
+            + (f"\n    body excerpt: {selftext}" if selftext else "")
+        )
+    return "\n".join(lines)
