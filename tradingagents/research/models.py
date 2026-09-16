@@ -280,6 +280,7 @@ class ResearchPacket:
     issues: list[ResearchIssue] = field(default_factory=list)
     coverage: dict[str, str] = field(default_factory=dict)
     provider_results: dict[str, str] = field(default_factory=dict)
+    financial_analysis: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> ResearchPacket:
@@ -299,6 +300,7 @@ class ResearchPacket:
             provider_results={
                 str(k): str(v) for k, v in dict(data.get("provider_results", {})).items()
             },
+            financial_analysis=dict(data.get("financial_analysis", {})),
         )
         if packet.identity is not None and packet.identity.ticker != packet.ticker:
             raise ValueError("packet identity ticker does not match packet ticker")
@@ -310,6 +312,9 @@ class ResearchPacket:
         if len(document_ids) != len(set(document_ids)):
             raise ValueError("packet contains duplicate document IDs")
         known_fact_ids = set(fact_ids)
+        selected_ids = set(packet.financial_analysis.get("selected_fact_ids", []))
+        if selected_ids - known_fact_ids:
+            raise ValueError("Financial analysis references missing selected facts")
         for fact in packet.facts:
             if fact.published_at is None:
                 raise ValueError(
@@ -330,6 +335,18 @@ class ResearchPacket:
                 raise ValueError(
                     f"packet document {document.document_id!r} is after the packet cutoff"
                 )
+        if "selected_inputs" in packet.financial_analysis:
+            from .reconciliation import normalize_concept
+
+            original_by_id = {fact.fact_id: fact for fact in packet.facts}
+            selected_inputs = [EvidenceFact.from_dict(item)
+                               for item in packet.financial_analysis["selected_inputs"]]
+            input_ids = [fact.fact_id for fact in selected_inputs]
+            if len(input_ids) != len(set(input_ids)) or set(input_ids) != selected_ids:
+                raise ValueError("Selected input views do not match the selected fact IDs")
+            for selected in selected_inputs:
+                if selected != normalize_concept(original_by_id[selected.fact_id]):
+                    raise ValueError("Selected input view differs from its original source fact")
         return packet
 
     def to_dict(self) -> dict[str, Any]:
@@ -347,12 +364,21 @@ class ResearchPacket:
             "issues": [issue.to_dict() for issue in self.issues],
             "coverage": dict(sorted(self.coverage.items())),
             "provider_results": dict(sorted(self.provider_results.items())),
+            "financial_analysis": self.financial_analysis,
         }
 
     def render_context(self, max_facts: int = 40) -> str:
         """Render bounded, source-linked context suitable for downstream agents."""
         max_facts = max(0, max_facts)
-        selected = _representative_facts(self.facts, max_facts)
+        active_ids = self.financial_analysis.get("selected_fact_ids")
+        eligible = self.facts
+        if active_ids is not None:
+            active_ids = set(active_ids)
+            eligible = [fact for fact in self.facts if fact.fact_id in active_ids or fact.kind is FactKind.CALCULATED]
+            normalized = {item["fact_id"]: EvidenceFact.from_dict(item)
+                          for item in self.financial_analysis.get("selected_inputs", [])}
+            eligible = [normalized.get(fact.fact_id, fact) for fact in eligible]
+        selected = _representative_facts(eligible, max_facts)
         rendered = self._render_context_with_facts(selected, len(self.facts))
         while selected and len(rendered) > 8000:
             selected.pop()
@@ -392,6 +418,8 @@ class ResearchPacket:
             )
         if self.thesis:
             lines.append(f"User thesis (unverified): {self.thesis}")
+        if self.financial_analysis:
+            lines.append("Financial inputs reconciled by concept and period; superseded reported facts remain in the full packet. Calculations do not establish valuation readiness.")
         lines.extend(["", "## Eligible facts"])
         for fact in selected:
             period = fact.period_end
@@ -406,17 +434,24 @@ class ResearchPacket:
             lines.append(f"- {total_fact_count - len(selected)} additional facts retained in packet.")
         lines.extend(["", "## Material limits and issues"])
         material = [issue for issue in self.issues if issue.severity is not IssueSeverity.INFO]
+        grouped = {}
+        for issue in material:
+            grouped.setdefault((issue.severity, issue.code), []).append(issue)
+        material = [items[0] for items in grouped.values()]
         issue_budget = max(80, min(500, 5000 // max(1, len(material))))
         for issue in material:
             metric = f" ({issue.metric})" if issue.metric else ""
             message = issue.message
+            count = len(grouped[(issue.severity, issue.code)])
+            if count > 1:
+                message = f"{count} occurrences; example: {message}"
             if len(message) > issue_budget:
                 message = message[: issue_budget - 3] + "..."
             lines.append(f"- [{issue.severity.value.upper()}:{issue.code}]{metric} {message}")
         if not material:
-            lines.append("- No material issue recorded by the Phase 1 checks.")
+            lines.append("- No material issue recorded by the evidence checks.")
         lines.append(
-            "- Phase 1 does not produce a valuation target or investment rating; "
+            "- The evidence layer does not produce a valuation target or investment rating; "
             "evidence coverage is independent of BUY/HOLD/SELL judgments."
         )
         return "\n".join(lines)
@@ -438,6 +473,18 @@ class ResearchPacket:
             "|---|---|",
         ]
         lines.extend(f"| {key} | {value} |" for key, value in sorted(self.coverage.items()))
+        if self.financial_analysis:
+            lines.extend(["", "## Financial reconciliation", "",
+                          f"Selected input facts: {len(self.financial_analysis.get('selected_fact_ids', []))}. All source versions remain below.",
+                          "Calculations are evidence, not a valuation or investment rating.", "",
+                          "| Calculated metric | Value | Unit | Period | Fact ID |",
+                          "|---|---:|---|---|---|"])
+            calculated = [fact for fact in self.facts if fact.kind is FactKind.CALCULATED]
+            latest = {}
+            for fact in sorted(calculated, key=lambda item: (item.period_end, item.period_start or "")):
+                latest[fact.metric] = fact
+            for metric, fact in sorted(latest.items()):
+                lines.append(f"| {metric} | {fact.value:,.4f} | {fact.unit} | {fact.period_start or 'instant'} to {fact.period_end} | {fact.fact_id} |")
         lines.extend(["", "## Facts", ""])
         if not self.facts:
             lines.append("No eligible facts were retained.")

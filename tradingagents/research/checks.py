@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from numbers import Real
 
+from .classification import classify_business
 from .models import (
     BusinessModel,
     CoverageStatus,
@@ -32,7 +33,7 @@ _METRIC_ALIASES = {
     "shareholders_equity": "equity",
     "common_stock_shares_outstanding": "shares_outstanding",
     "weighted_average_number_of_diluted_shares_outstanding": "weighted_average_shares",
-    "weighted_average_number_of_shares_outstanding_basic": "weighted_average_shares",
+    "weighted_average_number_of_shares_outstanding_basic": "weighted_average_shares_basic",
     "cash_and_cash_equivalents_at_carrying_value": "cash",
 }
 
@@ -40,76 +41,6 @@ _METRIC_ALIASES = {
 def canonical_metric(metric: str) -> str:
     key = "_".join(metric.strip().casefold().replace("-", " ").split())
     return _METRIC_ALIASES.get(key, key)
-
-
-def classify_business(identity: IssuerIdentity | None) -> tuple[BusinessModel, list[ResearchIssue]]:
-    """Classify from SIC only; never infer a model from the ticker."""
-    if identity is None or not identity.sic:
-        supplied = identity.business_model.casefold() if identity and identity.business_model else None
-        if supplied in {item.value for item in BusinessModel}:
-            return BusinessModel(supplied), [
-                ResearchIssue(
-                    code="BUSINESS_CLASSIFICATION_LIMITED",
-                    message=(
-                        f"No SIC was available; the provider-supplied {supplied!r} business "
-                        "model is provisional."
-                    ),
-                    severity=IssueSeverity.WARNING,
-                )
-            ]
-        return BusinessModel.GENERAL, [
-            ResearchIssue(
-                code="BUSINESS_CLASSIFICATION_LIMITED",
-                message="No SIC was available; general-company checks are a conservative fallback.",
-                severity=IssueSeverity.WARNING,
-            )
-        ]
-    try:
-        sic = int(identity.sic)
-    except ValueError:
-        return BusinessModel.GENERAL, [
-            ResearchIssue(
-                code="BUSINESS_CLASSIFICATION_LIMITED",
-                message=f"SIC {identity.sic!r} is not numeric; general-company checks were used.",
-                severity=IssueSeverity.WARNING,
-            )
-        ]
-    if 6000 <= sic <= 6199:
-        model = BusinessModel.BANK
-    elif sic == 6798:
-        model = BusinessModel.REIT
-    elif 5200 <= sic <= 5999:
-        model = BusinessModel.RETAIL
-    elif 7370 <= sic <= 7379:
-        model = BusinessModel.SOFTWARE
-    elif 2000 <= sic <= 3999:
-        model = BusinessModel.INDUSTRIAL
-    else:
-        model = BusinessModel.GENERAL
-    issues: list[ResearchIssue] = []
-    if model is BusinessModel.BANK and sic >= 6100:
-        issues.append(
-            ResearchIssue(
-                code="BUSINESS_CLASSIFICATION_LIMITED",
-                message=(
-                    f"SIC {sic} is in the broad credit-institution range; Phase 1 applies "
-                    "bank checks, but the issuer may be a nonbank lender."
-                ),
-                severity=IssueSeverity.INFO,
-            )
-        )
-    if model is BusinessModel.GENERAL:
-        issues.append(
-            ResearchIssue(
-                code="BUSINESS_CLASSIFICATION_GENERAL",
-                message=(
-                    f"SIC {sic} does not map to a Phase 1 specialized model; "
-                    "general-company checks were used."
-                ),
-                severity=IssueSeverity.INFO,
-            )
-        )
-    return model, issues
 
 
 @dataclass(frozen=True)
@@ -127,19 +58,20 @@ def run_checks(
     *,
     has_documents: bool = False,
     prior_issues: Iterable[ResearchIssue] = (),
+    derive_metrics: bool = True,
 ) -> CheckResult:
     facts_list = list(facts)
     business_model, issues = classify_business(identity)
     issues.extend(_dimension_issues(facts_list))
     issues.extend(_competition_issues(facts_list))
-    derived, derivation_issues = derive_free_cash_flow(facts_list)
+    derived, derivation_issues = derive_free_cash_flow(facts_list) if derive_metrics else ([], [])
     facts_list.extend(derived)
     issues.extend(derivation_issues)
     issues.extend(prior_issues)
 
     coverage = _coverage(identity, facts_list, business_model, has_documents)
     if any(
-        issue.code in {"FACT_CONFLICT", "DEFINITION_CONFLICT", "UNIT_CONFLICT", "INVALID_PERIOD"}
+        issue.code in {"FACT_CONFLICT", "DEFINITION_CONFLICT", "UNIT_CONFLICT", "INVALID_PERIOD", "RECONCILIATION_CONFLICT", "ADJUSTMENT_BASIS_CONFLICT", "QUARTER_DERIVATION_CONFLICT", "TTM_ANNUAL_CONFLICT", "FINANCIAL_INPUT_CONFLICT", "FINANCIAL_UNIT_CONFLICT", "FINANCIAL_DEFINITION_CONFLICT"}
         for issue in issues
     ):
         status = CoverageStatus.MATERIAL_CONFLICT
@@ -384,7 +316,7 @@ def _coverage(
                 "financial_position": _all_metrics(metrics, {"total_assets"}, {"deposits", "total_liabilities"}),
                 "capital": _all_metrics(metrics, {"equity"}),
                 "cash_flow": CoverageStatus.UNSUPPORTED.value,
-                "shares": _all_metrics(metrics, set(), {"shares_outstanding", "weighted_average_shares"}),
+                "shares": _all_metrics(metrics, set(), {"shares_outstanding", "weighted_average_shares", "weighted_average_shares_basic"}),
             }
         )
     else:
@@ -394,7 +326,7 @@ def _coverage(
                 "earnings": _all_metrics(metrics, {"revenue"}, earnings_any),
                 "financial_position": _all_metrics(metrics, {"total_assets"}, {"equity", "total_liabilities"}),
                 "cash_flow": _all_metrics(metrics, {"operating_cash_flow", "capital_expenditures"}),
-                "shares": _all_metrics(metrics, set(), {"shares_outstanding", "weighted_average_shares"}),
+                "shares": _all_metrics(metrics, set(), {"shares_outstanding", "weighted_average_shares", "weighted_average_shares_basic"}),
             }
         )
     return coverage

@@ -195,10 +195,59 @@ def test_sec_provider_preserves_sources_periods_and_concept_conflicts():
     assert revenue[0]["published_at"] == "2025-01-30T12:30:00Z"
     assert revenue[0]["retrieved_at"].endswith("Z")
     assert revenue[0]["source_tag"] == "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"
-    debt = [fact for fact in packet["facts"] if fact["metric"] == "debt"]
-    assert {fact["value"] for fact in debt} == {10, 90}
-    assert all(fact["adjustment_basis"] == "as_reported" and fact["kind"] == "reported" for fact in packet["facts"])
+    assert next(fact for fact in packet["facts"] if fact["metric"] == "long_term_debt_current")["value"] == 10
+    assert next(fact for fact in packet["facts"] if fact["metric"] == "long_term_debt_noncurrent")["value"] == 90
+    assert all(fact["kind"] == "reported" for fact in packet["facts"])
     assert packet["coverage"]["ticker_history"] == "partial"
+
+
+@pytest.mark.unit
+def test_sec_capex_uses_standardized_cash_outflow_positive_basis():
+    source = fixtures()
+    source[FACTS_URL]["facts"]["us-gaap"]["PaymentsToAcquirePropertyPlantAndEquipment"] = {
+        "label": "Payments to Acquire Property, Plant, and Equipment",
+        "units": {
+            "USD": [
+                {
+                    "start": "2024-01-01",
+                    "end": "2024-12-31",
+                    "val": 20,
+                    "accn": ACCESSION,
+                    "form": "10-K",
+                    "filed": "2025-01-30",
+                }
+            ]
+        },
+    }
+    packet = SecEdgarProvider("Research Test research@example.com", session=FakeSession(source)).fetch("AAPL", "2025-12-31")
+
+    capex = next(fact for fact in packet["facts"] if fact["metric"] == "capital_expenditures")
+    assert capex["adjustment_basis"] == "cash_outflow_positive"
+
+
+@pytest.mark.unit
+def test_sec_productive_assets_capex_stays_separate_from_ppe_only_capex():
+    source = fixtures()
+    source[FACTS_URL]["facts"]["us-gaap"]["PaymentsToAcquireProductiveAssets"] = {
+        "label": "Payments to Acquire Productive Assets",
+        "units": {
+            "USD": [
+                {
+                    "start": "2024-01-01",
+                    "end": "2024-12-31",
+                    "val": 25,
+                    "accn": ACCESSION,
+                    "form": "10-K",
+                    "filed": "2025-01-30",
+                }
+            ]
+        },
+    }
+    packet = SecEdgarProvider("Research Test research@example.com", session=FakeSession(source)).fetch("AAPL", "2025-12-31")
+
+    productive = next(fact for fact in packet["facts"] if fact["metric"] == "capital_expenditures_productive_assets")
+    assert productive["source_tag"] == "us-gaap:PaymentsToAcquireProductiveAssets"
+    assert productive["adjustment_basis"] == "cash_outflow_positive"
 
 
 @pytest.mark.unit

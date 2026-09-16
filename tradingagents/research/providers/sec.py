@@ -32,28 +32,30 @@ _METRICS: dict[str, tuple[tuple[str, str, str], ...]] = {
         ("us-gaap", "RevenueFromContractWithCustomerIncludingAssessedTax", "Revenue including assessed tax"),
     ),
     "net_income": (("us-gaap", "NetIncomeLoss", "Net income (loss)"),),
+    "net_income_attributable_to_parent": (("us-gaap", "NetIncomeLossAttributableToParent", "Net income (loss) attributable to parent"),),
     "operating_income": (("us-gaap", "OperatingIncomeLoss", "Operating income (loss)"),),
     "operating_cash_flow": (("us-gaap", "NetCashProvidedByUsedInOperatingActivities", "Net cash from operating activities"),),
     "capital_expenditures": (("us-gaap", "PaymentsToAcquirePropertyPlantAndEquipment", "Payments to acquire property, plant and equipment"),),
-    "cash": (
-        ("us-gaap", "CashAndCashEquivalentsAtCarryingValue", "Cash and cash equivalents"),
-        ("us-gaap", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash, cash equivalents, restricted cash"),
-    ),
-    "debt": (
-        ("us-gaap", "LongTermDebt", "Long-term debt"),
-        ("us-gaap", "LongTermDebtCurrent", "Current portion of long-term debt"),
-        ("us-gaap", "LongTermDebtNoncurrent", "Noncurrent long-term debt"),
-        ("us-gaap", "LongTermDebtAndFinanceLeaseObligationsCurrent", "Current debt and finance leases"),
-        ("us-gaap", "LongTermDebtAndFinanceLeaseObligationsNoncurrent", "Noncurrent debt and finance leases"),
-    ),
+    # This includes software and other intangibles as well as PP&E.  It stays
+    # distinct from the PP&E-only metric above; callers must opt in explicitly.
+    "capital_expenditures_productive_assets": (("us-gaap", "PaymentsToAcquireProductiveAssets", "Payments to acquire productive assets, including software and other intangibles"),),
+    "cash": (("us-gaap", "CashAndCashEquivalentsAtCarryingValue", "Cash and cash equivalents"),),
+    "cash_including_restricted": (("us-gaap", "CashCashEquivalentsRestrictedCashAndRestrictedCashEquivalents", "Cash, cash equivalents, restricted cash"),),
+    # Do not use these as total company debt: LongTermDebt excludes other debt
+    # classes, and lease-inclusive tags may overlap their non-lease counterparts.
+    "long_term_debt_total": (("us-gaap", "LongTermDebt", "Long-term debt"),),
+    "long_term_debt_current": (("us-gaap", "LongTermDebtCurrent", "Current portion of long-term debt"),),
+    "long_term_debt_noncurrent": (("us-gaap", "LongTermDebtNoncurrent", "Noncurrent long-term debt"),),
+    "long_term_debt_including_finance_leases_total": (("us-gaap", "LongTermDebtAndFinanceLeaseObligations", "Long-term debt and finance leases"),),
+    "long_term_debt_including_finance_leases_current": (("us-gaap", "LongTermDebtAndFinanceLeaseObligationsCurrent", "Current long-term debt and finance leases"),),
+    "long_term_debt_including_finance_leases_noncurrent": (("us-gaap", "LongTermDebtAndFinanceLeaseObligationsNoncurrent", "Noncurrent long-term debt and finance leases"),),
     "total_assets": (("us-gaap", "Assets", "Total assets"),),
     "total_liabilities": (("us-gaap", "Liabilities", "Total liabilities"),),
-    "equity": (
-        ("us-gaap", "StockholdersEquity", "Stockholders' equity"),
-        ("us-gaap", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", "Equity including noncontrolling interest"),
-    ),
+    "equity": (("us-gaap", "StockholdersEquity", "Stockholders' equity"),),
+    "equity_including_noncontrolling": (("us-gaap", "StockholdersEquityIncludingPortionAttributableToNoncontrollingInterest", "Equity including noncontrolling interest"),),
     "shares_outstanding": (("dei", "EntityCommonStockSharesOutstanding", "Entity common shares outstanding"),),
     "weighted_average_shares": (("us-gaap", "WeightedAverageNumberOfDilutedSharesOutstanding", "Weighted-average diluted shares"),),
+    "weighted_average_shares_basic": (("us-gaap", "WeightedAverageNumberOfSharesOutstandingBasic", "Weighted-average basic shares"),),
     "stock_based_compensation": (("us-gaap", "ShareBasedCompensation", "Share-based compensation"),),
 }
 
@@ -422,6 +424,17 @@ class SecEdgarProvider:
                         if dedupe_key in seen:
                             continue
                         seen.add(dedupe_key)
+                        # The US-GAAP concept itself is an outflow payment.  It
+                        # is standardized here so FCF derivation can safely use
+                        # CFO minus capex without guessing a vendor sign.
+                        adjustment_basis = (
+                            "cash_outflow_positive"
+                            if taxonomy == "us-gaap" and concept in {
+                                "PaymentsToAcquirePropertyPlantAndEquipment",
+                                "PaymentsToAcquireProductiveAssets",
+                            }
+                            else "as_reported"
+                        )
                         fact = {
                             "fact_id": f"sec:{taxonomy}:{concept}:{accession}:{unit}:{entry.get('start') or 'instant'}:{period_end}",
                             "metric": metric,
@@ -434,7 +447,7 @@ class SecEdgarProvider:
                             "accession": accession,
                             "source_tag": f"{taxonomy}:{concept}",
                             "definition": concept_payload.get("label") or definition,
-                            "adjustment_basis": "as_reported",
+                            "adjustment_basis": adjustment_basis,
                             "kind": "reported",
                         }
                         if entry.get("start"):

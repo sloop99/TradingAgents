@@ -6,7 +6,8 @@ from collections.abc import Iterable, Mapping
 from datetime import date, datetime, time, timezone
 from typing import Any, Protocol
 
-from .checks import run_checks
+from .checks import classify_business, run_checks
+from .financials import analyze_financials
 from .models import (
     CoverageStatus,
     EvidenceDocument,
@@ -16,6 +17,7 @@ from .models import (
     ResearchIssue,
     ResearchPacket,
 )
+from .reconciliation import reconcile_facts
 
 
 class ResearchProvider(Protocol):
@@ -190,11 +192,35 @@ def build_packet(
     issues.extend(fact_id_issues)
     documents = _dedupe_documents(documents)
 
+    reconciled = reconcile_facts(facts)
+    issues.extend(reconciled.issues)
+    if any(issue.severity is IssueSeverity.ERROR and issue.metric in {
+        "operating_cash_flow", "capital_expenditures"
+    } for issue in reconciled.issues):
+        issues.append(ResearchIssue(
+            code="FCF_DERIVATION_WITHHELD",
+            message="Conflicting CFO or capex inputs were excluded; affected periods cannot produce free cash flow.",
+            severity=IssueSeverity.WARNING,
+            metric="free_cash_flow",
+        ))
+    business_model, _ = classify_business(identity)
+    financials = analyze_financials(reconciled.selected_facts, business_model)
+    issues.extend(financials.issues)
+    stale_inputs = financials.summary.get("stale_inputs", [])
+    for stale in stale_inputs:
+        issues.append(ResearchIssue(
+            code="FINANCIAL_INPUT_STALE",
+            message=(f"Latest {stale['metric']} ends {stale['latest_period_end']}, before the "
+                     f"latest reporting window {stale['latest_reporting_end']}; no current value was inferred."),
+            severity=IssueSeverity.WARNING,
+            metric=stale["metric"],
+        ))
     checked = run_checks(
         identity,
-        facts,
+        reconciled.selected_facts,
         has_documents=bool(documents),
         prior_issues=issues,
+        derive_metrics=False,
     )
     coverage = dict(checked.coverage)
     for area, statuses in supplied_coverage.items():
@@ -202,6 +228,11 @@ def build_packet(
         if area not in coverage or provider_status == CoverageStatus.MATERIAL_CONFLICT.value:
             coverage[area] = provider_status
     status = checked.status
+    coverage["financial_calculations"] = "partial" if financials.derived_facts else "unsupported"
+    if stale_inputs and status is CoverageStatus.SUFFICIENT:
+        status = CoverageStatus.PARTIAL
+    if any(item["metric"] in {"operating_cash_flow", "capital_expenditures"} for item in stale_inputs):
+        coverage["cash_flow"] = CoverageStatus.PARTIAL.value
     if any(value == CoverageStatus.MATERIAL_CONFLICT.value for value in coverage.values()):
         status = CoverageStatus.MATERIAL_CONFLICT
     if any(
@@ -218,7 +249,7 @@ def build_packet(
         status=status,
         business_model=checked.business_model,
         identity=identity,
-        facts=checked.facts,
+        facts=facts + financials.derived_facts,
         documents=sorted(
             documents,
             key=lambda item: (item.published_at, item.document_id),
@@ -226,6 +257,12 @@ def build_packet(
         issues=checked.issues,
         coverage=dict(sorted(coverage.items())),
         provider_results=dict(sorted(provider_results.items())),
+        financial_analysis={
+            "selected_fact_ids": [fact.fact_id for fact in reconciled.selected_facts],
+            "selected_inputs": [fact.to_dict() for fact in reconciled.selected_facts],
+            "decisions": reconciled.decisions,
+            "summary": financials.summary,
+        },
     )
 
 

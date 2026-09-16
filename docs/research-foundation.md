@@ -1,6 +1,6 @@
 # Research foundation roadmap
 
-Status: Phase 1 evidence foundation implemented on `research-foundation`; validation and review remain separate from merging into main.
+Status: the evidence foundation and conservative financial-reconciliation layer are implemented on `research-foundation`. Main remains the integration branch; no merge is implied.
 
 ## Scope
 
@@ -197,3 +197,21 @@ time. Final regression suite: 639 passed, 2 skipped, 70 subtests; Ruff passes.
 Local raw diagnostics and the detailed report are under `.tradingagents/validation/`
 and remain excluded from Git. This validates ingestion and failure behavior, not
 valuation accuracy or production readiness.
+
+### Financial reconciliation implementation (2026-09-16)
+
+The initial calculation layer is implemented; see
+[financial reconciliation](financial-reconciliation.md) for behavior and boundaries.
+SEC access subsequently succeeded with the user-approved local identifying contact.
+Six previously retrieved live SEC datasets were replayed offline through concept
+selection and period calculations. Nine issuer benchmark comparisons passed across
+revenue, quarterly CFO, operating margin and revenue growth. The full suite passed
+674 tests and 70 subtests, with 2 optional skips; Ruff passed.
+
+Reconciliation retains source versions and records choices, while quarter/TTM
+calculations preserve formula lineage. Equipment-code business classification,
+explicit stale-input warnings, PP&E/productive-assets distinctions and share-basis
+limits prevent unsupported shortcuts. Remaining conflicts and missing inputs are
+still reported. Net debt/enterprise value, comprehensive share reconciliation and
+valuation models are not yet implemented. Local validation artifacts remain under
+`.tradingagents/validation/phase2/`; personal configuration stays outside Git.
