@@ -5,6 +5,12 @@ extracts numeric Inline XBRL candidates. This complements the aggregate companyf
 feed: share-class, debt-instrument and other context dimensions stay attached to
 the filing facts instead of being treated as consolidated company totals.
 
+The provider resolves the supplied ticker through SEC data; it has no sample-stock
+allowlist. Eligible forms are 10-K, 10-Q, 20-F and 40-F. This supports foreign SEC
+filers as well as US issuers, but does not provide exchange-local filings for
+companies outside EDGAR. Supported numeric concepts and filing formats remain
+limited; a successful ticker lookup does not imply complete financial coverage.
+
 ```powershell
 python -m tradingagents.research FTNT --as-of 2026-09-16 --filings --no-market
 ```
@@ -26,6 +32,20 @@ All extracted metrics use the `filing_` prefix. A known taxonomy tag does not
 promote a candidate into a consolidated financial input. Reconciliation records
 these as `candidate_only`; financial calculations and valuation readiness remain
 independent of the number of candidates found.
+
+The context-reconciliation pass now binds accepted metadata to retained source
+facts, removes repeated equivalent nodes and groups comparable share-class and
+debt observations. Dates, units, accessions and definitions of the reported concepts
+remain separate. It compares observed class sums with comparable reported totals;
+the equality itself does not prove that all economic share classes are covered.
+
+Where both undimensioned current and noncurrent long-term debt are explicitly
+reported for the same accession/date/currency, the pass calculates a
+`filing_long_term_debt_subtotal` with source lineage. It does not add commercial
+paper, leases or issuer-specific debt tags automatically, and it never renames
+that subtotal `total_debt`. A missing component is not treated as zero. Results,
+discrepancies and open completeness requirements appear in
+`financial_analysis.filing_reconciliation` and the coverage report.
 
 The parser checks context issuer, dates, units, numeric transformations, scale and
 sign. It preserves explicit dimensions, including share classes. Unsupported or

@@ -423,9 +423,12 @@ class ResearchPacket:
             lines.append(f"User thesis (unverified): {self.thesis}")
         if self.financial_analysis:
             lines.append("Financial inputs reconciled by concept and period; superseded reported facts remain in the full packet. Calculations do not establish valuation readiness.")
-        filing_count = sum(f.metric.startswith("filing_") for f in self.facts)
+        filing_count = sum(f.kind is FactKind.REPORTED and f.metric.startswith("filing_") for f in self.facts)
         if filing_count:
             lines.append(f"Inline filing candidates: {filing_count}; retained for context review, excluded from consolidated calculations.")
+        filing_review = self.financial_analysis.get("filing_reconciliation", {})
+        if filing_review.get("status") not in (None, "unsupported"):
+            lines.append(f"Filing reconciliation: {filing_review['status']}; scoped subtotals do not establish total debt or complete share-class coverage.")
         capitalization = self.financial_analysis.get("capitalization", {})
         if capitalization:
             missing = ", ".join(capitalization.get("missing_metrics", [])) or "none"
@@ -503,11 +506,20 @@ class ResearchPacket:
                           "Withheld metrics: " + (", ".join(capitalization.get("missing_metrics", [])) or "none") + ".", ""])
             for requirement, satisfied in capitalization.get("market_cap_prerequisites", {}).items():
                 lines.append(f"- {requirement}: {'supported' if satisfied else 'unresolved'}")
-        filing_candidates = [fact for fact in self.facts if fact.metric.startswith("filing_")]
+        filing_candidates = [fact for fact in self.facts
+                             if fact.kind is FactKind.REPORTED and fact.metric.startswith("filing_")]
         if filing_candidates:
             lines.extend(["", "## Filing context review", "",
                           f"{len(filing_candidates)} inline filing candidates retained with source anchors and context definitions.",
                           "These may represent individual share classes, debt instruments or other dimensions; they are excluded from consolidated calculations pending reconciliation."])
+        filing_review = self.financial_analysis.get("filing_reconciliation", {})
+        if filing_review.get("status") not in (None, "unsupported"):
+            counts = filing_review.get("counts", {})
+            lines.extend(["", "### Scoped reconciliation", "",
+                          f"Status: **{filing_review['status']}**. Supported equalities: {len(filing_review.get('supported_equalities', []))}; discrepancies: {len(filing_review.get('discrepancies', []))}.",
+                          "Long-term debt subtotals cover only the identified current and noncurrent components; they are not complete total debt.",
+                          "A matching sum of observed share classes does not establish complete class coverage, ADR conversion or split history.",
+                          f"Validated source bindings: {counts.get('validated_bindings', 0)}; rejected bindings: {counts.get('invalid_bindings', 0)}."])
         lines.extend(["", "## Facts", ""])
         if not self.facts:
             lines.append("No eligible facts were retained.")

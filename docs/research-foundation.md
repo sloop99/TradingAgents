@@ -248,3 +248,20 @@ Live validation retrieved all six sample filings and retained 388 candidates.
 checks passed. Network-disabled replay and packet roundtrips passed. Final suite:
 725 passed, 2 optional skips, 70 subtests passed. Detailed local artifacts are in
 `.tradingagents/validation/filings/`.
+
+### Filing context reconciliation (2026-09-16)
+
+Filing metadata now binds to retained source facts before share-class comparisons
+or debt subtotals are attempted. Repeated equivalent observations are removed,
+while mismatched dates, units, contexts or values remain separate or are rejected.
+The six-company replay bound 388 source observations, removed 89 repetitions and
+produced five scoped long-term-debt subtotals. It did not infer complete total debt
+or complete share-class coverage.
+
+Filing eligibility now includes 20-F and 40-F alongside 10-K and 10-Q. The provider
+has no ticker allowlist. A separate live TSM test retrieved a 20-F and extracted
+two supported numeric candidates; this demonstrates foreign-filing retrieval,
+not comprehensive IFRS or investment coverage. Detailed artifacts are under
+`.tradingagents/validation/filing-contexts/`.
+Regression: 739 passed, 2 optional skips, 70 subtests passed; focused rendering
+checks and Ruff also passed.

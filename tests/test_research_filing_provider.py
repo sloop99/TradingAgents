@@ -142,6 +142,42 @@ def test_filing_provider_rejects_arbitrary_or_unsafe_document_sources():
 
 
 @pytest.mark.unit
+def test_filing_provider_accepts_foreign_issuer_20f_and_40f_without_ticker_allowlist(monkeypatch):
+    def filing_document(accession, form, title, published_at):
+        compact = accession.replace("-", "")
+        return {
+            "document_id": f"sec:{accession}",
+            "form": form,
+            "published_at": published_at,
+            "source_url": f"https://www.sec.gov/Archives/edgar/data/320193/{compact}/{accession}-index.html",
+            "accession": accession,
+            "title": title,
+        }
+
+    foreign_documents = [
+        filing_document("0000320193-25-000020", "20-F", "foreign-annual.htm", "2025-03-01T12:00:00Z"),
+        filing_document("0000320193-25-000040", "40-F", "canadian-annual.html", "2025-04-01T12:00:00Z"),
+        filing_document("0000320193-27-000001", "20-F", "future.htm", "2027-01-01T12:00:00Z"),
+    ]
+    session = FakeSession([FakeResponse(), FakeResponse()])
+    provider = SecFilingProvider(
+        "Research Test research@example.com",
+        session=session,
+        sec_provider=BaseProvider(foreign_documents),
+        max_filings=3,
+    )
+    monkeypatch.setattr(provider, "_extract", lambda html, **kwargs: extracted())
+
+    packet = provider.fetch("fstr", "2025-12-31")
+
+    assert provider.sec_provider.calls == [("FSTR", "2025-12-31")]
+    assert len(session.calls) == 2
+    assert {item["form"] for item in packet["metadata"]["filings"]} == {"20-F", "40-F"}
+    assert all("/Archives/edgar/data/320193/" in item["source_url"] for item in packet["metadata"]["filings"])
+    assert not any("future.htm" in call[0] for call in session.calls)
+
+
+@pytest.mark.unit
 def test_filing_provider_uses_immutable_raw_html_cache(monkeypatch):
     cache = MemoryCache()
     session = FakeSession([FakeResponse()])

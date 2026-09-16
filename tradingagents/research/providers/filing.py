@@ -19,7 +19,10 @@ import requests
 
 from .sec import SEC_WWW, SecEdgarProvider, _TransientSecError
 
-_ELIGIBLE_FORMS = {"10-K", "10-Q"}
+# SEC's primary issuer reports include domestic annual/quarterly reports and
+# foreign/private-issuer annual reports.  The parser retains them as candidate
+# evidence; accepting the form does not claim complete IFRS concept coverage.
+_ELIGIBLE_FORMS = {"10-K", "10-Q", "20-F", "40-F"}
 _TRANSIENT_STATUS = {429, 500, 502, 503, 504}
 _MAX_FILINGS = 3
 _MAX_HTML_BYTES = 15 * 1024 * 1024
@@ -117,7 +120,7 @@ class SecFilingProvider:
         if not eligible:
             packet["issues"].append(self._issue(
                 "SEC_FILING_UNAVAILABLE",
-                "No accepted 10-K or 10-Q primary HTML document is available at the requested cutoff.",
+                "No accepted 10-K, 10-Q, 20-F, or 40-F primary HTML document is available at the requested cutoff.",
                 "warning",
             ))
             return packet

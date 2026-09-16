@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from .capitalization import analyze_capitalization
 from .checks import classify_business, run_checks
+from .filing_reconciliation import analyze_filing_contexts
 from .financials import analyze_financials
 from .models import (
     CoverageStatus,
@@ -79,6 +80,7 @@ def build_packet(
     issues: list[ResearchIssue] = []
     supplied_coverage: dict[str, list[str]] = {}
     provider_results: dict[str, str] = {}
+    filing_metadata: list[dict] = []
 
     for index, provider in enumerate(providers):
         provider_name = _provider_name(provider, index)
@@ -179,6 +181,11 @@ def build_packet(
                 issues.append(ResearchIssue.from_dict(raw_issue))
             except (TypeError, ValueError) as exc:
                 issues.append(_invalid_record_issue(provider_name, "issue", exc))
+        metadata = payload.get("metadata")
+        if isinstance(metadata, Mapping):
+            filings = metadata.get("filings")
+            if isinstance(filings, list):
+                filing_metadata.extend(item for item in filings if isinstance(item, dict))
         raw_coverage = payload.get("coverage", {}) or {}
         if not isinstance(raw_coverage, Mapping):
             issues.append(
@@ -217,6 +224,8 @@ def build_packet(
             metric="free_cash_flow",
         ))
     business_model, _ = classify_business(identity)
+    filing_review = analyze_filing_contexts(facts, filing_metadata, normalized_as_of)
+    issues.extend(filing_review.issues)
     financials = analyze_financials(reconciled.selected_facts, business_model)
     issues.extend(financials.issues)
     capitalization = analyze_capitalization(
@@ -247,6 +256,7 @@ def build_packet(
     status = checked.status
     coverage["financial_calculations"] = "partial" if financials.derived_facts else "unsupported"
     coverage["capitalization"] = capitalization.summary["status"]
+    coverage["filing_reconciliation"] = filing_review.summary["status"]
     if any(fact.metric in {"enterprise_value_to_revenue", "price_to_earnings", "price_to_free_cash_flow"}
            for fact in capitalization.derived_facts):
         coverage["valuation"] = "partial"
@@ -270,7 +280,7 @@ def build_packet(
         status=status,
         business_model=checked.business_model,
         identity=identity,
-        facts=facts + financials.derived_facts + capitalization.derived_facts,
+        facts=facts + financials.derived_facts + capitalization.derived_facts + filing_review.derived_facts,
         documents=sorted(
             documents,
             key=lambda item: (item.published_at, item.document_id),
@@ -284,6 +294,7 @@ def build_packet(
             "decisions": reconciled.decisions,
             "summary": financials.summary,
             "capitalization": capitalization.summary,
+            "filing_reconciliation": filing_review.summary,
         },
     )
 
