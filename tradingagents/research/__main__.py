@@ -51,8 +51,13 @@ def main(argv=None):
         cache = EvidenceCache(args.cache_dir)
         providers = [SecEdgarProvider(user_agent=args.sec_user_agent, cache=cache)]
         if not args.no_market:
+            import yfinance as yf
+
             from .providers.market import YahooMarketProvider
 
+            # yfinance has its own SQLite cache, separate from EvidenceCache.
+            # Keep it in the caller-selected writable cache tree as well.
+            yf.set_tz_cache_location(str((args.cache_dir / "yfinance").resolve()))
             providers.append(YahooMarketProvider(cache=cache))
     try:
         packet = build_packet(ticker, args.as_of, providers, args.horizon, args.thesis)

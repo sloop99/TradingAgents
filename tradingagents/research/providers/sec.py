@@ -73,6 +73,7 @@ class SecEdgarProvider:
         self.cache = cache
         self.session = session or requests.Session()
         self._last_request_at = 0.0
+        self._retrieved_at_by_url: dict[str, str] = {}
 
     def fetch(self, ticker: str, as_of: str) -> dict[str, Any]:
         """Return plain-dict SEC evidence available no later than ``as_of``.
@@ -144,9 +145,12 @@ class SecEdgarProvider:
             company_facts = self._get_json(f"{SEC_DATA}/api/xbrl/companyfacts/CIK{cik}.json")
         except Exception as exc:
             issues.append(self._issue("companyfacts_unavailable", str(exc), "error"))
-            result["coverage"]["facts"] = "unavailable"
+            result["coverage"]["facts"] = "unsupported"
             return result
-        facts, fact_issues = self._facts(company_facts, filing_by_accession, cutoff, retrieved_at)
+        facts_retrieved_at = self._retrieved_at_by_url.get(
+            f"{SEC_DATA}/api/xbrl/companyfacts/CIK{cik}.json", retrieved_at
+        )
+        facts, fact_issues = self._facts(company_facts, filing_by_accession, cutoff, facts_retrieved_at)
         result["facts"] = facts
         issues.extend(fact_issues)
         result["coverage"]["facts"] = "sufficient" if facts else "partial"
@@ -192,8 +196,9 @@ class SecEdgarProvider:
                         "name": record.get("name"),
                         "exchange": record.get("exchange"),
                     }
-        except Exception:
-            pass
+        except RuntimeError as exc:
+            if self._http_status(exc) != 404:
+                raise
         ticker_payload = self._get_json(f"{SEC_WWW}/files/company_tickers.json")
         values = ticker_payload.values() if isinstance(ticker_payload, dict) else []
         for record in values:
@@ -209,11 +214,15 @@ class SecEdgarProvider:
             if isinstance(latest, dict) and isinstance(latest.get("snapshot_key"), str):
                 cached = self.cache.get_json(latest["snapshot_key"])
                 if isinstance(cached, dict) and isinstance(cached.get("payload"), dict):
+                    cached_retrieved_at = cached.get("retrieved_at")
+                    if isinstance(cached_retrieved_at, str):
+                        self._retrieved_at_by_url[url] = cached_retrieved_at
                     return cached["payload"]
 
         payload = self._request_json(url)
+        retrieved_at = self._now_iso()
+        self._retrieved_at_by_url[url] = retrieved_at
         if self.cache is not None:
-            retrieved_at = self._now_iso()
             snapshot_key = f"sec:snapshot:{key_hash}:{retrieved_at}"
             record = {"retrieved_at": retrieved_at, "url": url, "payload": payload}
             digest = self.cache.put_json(snapshot_key, record)
@@ -250,11 +259,25 @@ class SecEdgarProvider:
                 if attempt == 2 or not self._is_transient(exc):
                     break
                 time.sleep(0.4 * (attempt + 1))
-        raise RuntimeError(f"SEC request failed for {url}: {last_error}")
+        raise RuntimeError(f"SEC request failed for {url}: {last_error}") from last_error
+
+    @staticmethod
+    def _http_status(exc: Exception) -> int | None:
+        cause = exc.__cause__
+        if isinstance(cause, requests.HTTPError) and cause.response is not None:
+            return cause.response.status_code
+        return None
 
     @staticmethod
     def _is_transient(exc: Exception) -> bool:
-        return isinstance(exc, (requests.RequestException, _TransientSecError))
+        if isinstance(exc, _TransientSecError):
+            return True
+        if isinstance(exc, (requests.ConnectionError, requests.Timeout)):
+            return True
+        if isinstance(exc, requests.HTTPError):
+            response = exc.response
+            return response is not None and response.status_code in _TRANSIENT_STATUS
+        return False
 
     def _respect_rate_limit(self) -> None:
         delay = 0.35 - (time.monotonic() - self._last_request_at)

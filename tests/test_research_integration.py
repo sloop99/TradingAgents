@@ -57,6 +57,22 @@ def test_cli_rejects_path_tickers_before_fetch():
     assert error.value.code == 2
 
 
+def test_cli_places_yahoo_sqlite_cache_in_selected_directory(tmp_path, monkeypatch):
+    import yfinance as yf
+
+    from tradingagents.research.providers.market import YahooMarketProvider
+    from tradingagents.research.providers.sec import SecEdgarProvider
+
+    configured = []
+    monkeypatch.setattr(yf, 'set_tz_cache_location', configured.append)
+    monkeypatch.setattr(SecEdgarProvider, 'fetch', lambda *args: {})
+    monkeypatch.setattr(YahooMarketProvider, 'fetch', lambda *args: {})
+    cache = tmp_path / 'cache'
+    assert main(['TEST', '--as-of', '2026-09-16', '--cache-dir', str(cache),
+                 '--output-dir', str(tmp_path / 'out')]) == 0
+    assert configured == [str((cache / 'yfinance').resolve())]
+
+
 @pytest.mark.parametrize('debug', [False, True])
 def test_graph_shares_packet_and_preserves_it_after_node_deltas(debug):
     from tradingagents.graph.trading_graph import TradingAgentsGraph

@@ -177,3 +177,23 @@ then add deterministic TTM metrics and business-appropriate valuation methods.
 - The standalone CLI was smoke-tested with missing SEC configuration and emits
   an unsupported evidence packet successfully. Live Yahoo retrieval and a full
   LLM-backed research run were not exercised as part of this build.
+
+### Live validation follow-up (2026-09-16)
+
+Market retrieval passed for CRWD, FTNT, PANW, JPM, WMT and CAT: each returned
+30 completed daily bars through September 15. Market-only evidence stays partial.
+A real CLI run retained 60 facts and replayed identical facts/timestamps from cache
+without network access. The CLI now places yfinance's separate SQLite cache under
+`--cache-dir/yfinance`; a writable cache and permitted network access are required.
+
+SEC ticker mapping and a submissions diagnostic both returned HTTP 403. The test
+stopped; full SEC statements and cross-source financial comparisons remain blocked.
+A user-approved identifying contact is needed for the next bounded SEC check;
+a contact change alone is not guaranteed to resolve the access restriction.
+
+The validation fixed permanent-error retries, 403 map fallback, cached SEC fetch
+timestamps, and an invalid failure coverage value. Tests now freeze market retrieval
+time. Final regression suite: 639 passed, 2 skipped, 70 subtests; Ruff passes.
+Local raw diagnostics and the detailed report are under `.tradingagents/validation/`
+and remain excluded from Git. This validates ingestion and failure behavior, not
+valuation accuracy or production readiness.

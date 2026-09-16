@@ -3,8 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 
 import pytest
+import requests
 
 from tradingagents.research.engine import build_packet
+from tradingagents.research.providers import sec as sec_module
 from tradingagents.research.providers.sec import SecEdgarProvider
 
 
@@ -15,7 +17,9 @@ class FakeResponse:
 
     def raise_for_status(self):
         if self.status_code >= 400:
-            raise RuntimeError(f"HTTP {self.status_code}")
+            response = requests.Response()
+            response.status_code = self.status_code
+            raise requests.HTTPError(f"HTTP {self.status_code}", response=response)
 
     def json(self):
         return deepcopy(self.payload)
@@ -29,6 +33,16 @@ class FakeSession:
     def get(self, url, **kwargs):
         self.calls.append((url, kwargs))
         return FakeResponse(self.by_url[url])
+
+
+class SequencedSession:
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return self.responses.pop(0)
 
 
 class MemoryCache:
@@ -206,6 +220,28 @@ def test_sec_provider_cache_uses_immutable_snapshot_and_latest_pointer():
 
 
 @pytest.mark.unit
+def test_sec_provider_uses_original_companyfacts_snapshot_time_for_cached_facts(monkeypatch):
+    timestamps = iter(
+        [
+            "2026-09-16T00:00:00Z",  # first fetch packet
+            "2026-09-16T00:00:01Z",  # ticker mapping snapshot
+            "2026-09-16T00:00:02Z",  # submissions snapshot
+            "2026-09-16T00:00:03Z",  # companyfacts snapshot
+            "2026-09-16T00:01:00Z",  # second fetch packet
+        ]
+    )
+    monkeypatch.setattr(SecEdgarProvider, "_now_iso", staticmethod(lambda: next(timestamps)))
+    provider = SecEdgarProvider(
+        "Research Test research@example.com", cache=MemoryCache(), session=FakeSession(fixtures())
+    )
+
+    provider.fetch("AAPL", "2025-12-31")
+    cached_packet = provider.fetch("AAPL", "2025-12-31")
+
+    assert {fact["retrieved_at"] for fact in cached_packet["facts"]} == {"2026-09-16T00:00:03Z"}
+
+
+@pytest.mark.unit
 def test_missing_user_agent_and_unresolved_ticker_stop_before_follow_on_requests():
     no_agent_session = FakeSession(fixtures())
     no_agent = SecEdgarProvider("", session=no_agent_session).fetch("AAPL", "2025-12-31")
@@ -222,6 +258,60 @@ def test_missing_user_agent_and_unresolved_ticker_stop_before_follow_on_requests
     assert unresolved["identity"] == {"ticker": "MISS"}
     assert unresolved["issues"][0]["code"] == "unsupported_ticker"
     assert unresolved["coverage"]["documents"] == "unsupported"
+
+
+@pytest.mark.unit
+def test_sec_provider_does_not_retry_permanent_http_errors():
+    session = SequencedSession([FakeResponse({}, status_code=403)])
+    provider = SecEdgarProvider("Research Test research@example.com", session=session)
+
+    with pytest.raises(RuntimeError, match="HTTP 403") as error:
+        provider._request_json(TICKERS_URL)
+
+    assert len(session.calls) == 1
+    assert isinstance(error.value.__cause__, requests.HTTPError)
+    assert error.value.__cause__.response.status_code == 403
+
+
+@pytest.mark.unit
+def test_sec_provider_uses_legacy_ticker_map_after_primary_404():
+    session = SequencedSession(
+        [
+            FakeResponse({}, status_code=404),
+            FakeResponse({"0": {"cik_str": 320193, "ticker": "AAPL", "title": "APPLE INC"}}),
+        ]
+    )
+    provider = SecEdgarProvider("Research Test research@example.com", session=session)
+
+    assert provider._resolve_listing("AAPL") == {"cik": 320193, "name": "APPLE INC"}
+    assert len(session.calls) == 2
+
+
+@pytest.mark.unit
+def test_sec_provider_stops_after_mapping_403_without_invalid_packet_records():
+    session = SequencedSession([FakeResponse({}, status_code=403)])
+    provider = SecEdgarProvider("Research Test research@example.com", session=session)
+
+    packet = build_packet("AAPL", "2025-12-31", [provider])
+
+    assert len(session.calls) == 1
+    assert any(issue.code == "sec_request_failed" for issue in packet.issues)
+    assert not any(issue.code == "INVALID_PROVIDER_RECORD" for issue in packet.issues)
+    assert packet.coverage["facts"] == "unsupported"
+
+
+@pytest.mark.unit
+def test_sec_provider_retries_transient_http_429_with_bounded_attempts(monkeypatch):
+    session = SequencedSession([
+        FakeResponse({}, status_code=429),
+        FakeResponse({}, status_code=429),
+        FakeResponse({"ok": True}),
+    ])
+    provider = SecEdgarProvider("Research Test research@example.com", session=session)
+    monkeypatch.setattr(sec_module.time, "sleep", lambda _: None)
+
+    assert provider._request_json(TICKERS_URL) == {"ok": True}
+    assert len(session.calls) == 3
 
 
 @pytest.mark.unit

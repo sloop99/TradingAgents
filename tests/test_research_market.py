@@ -76,7 +76,8 @@ def test_network_failure_is_graceful_and_cached():
     assert any(issue["code"] == "MARKET_PROVIDER_ERROR" for issue in first["issues"])
 
 
-def test_market_coverage_uses_status_values_and_engine_keeps_eligible_facts():
+def test_market_coverage_uses_status_values_and_engine_keeps_eligible_facts(monkeypatch):
+    monkeypatch.setattr(YahooMarketProvider, "_retrieved_at", staticmethod(lambda: "2026-09-16T12:00:00Z"))
     class FakeTicker:
         def history(self, **kwargs):
             return pd.DataFrame(
