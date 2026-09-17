@@ -55,3 +55,17 @@ The next data task is to extract and reconcile share classes, split coverage and
 capital-structure completeness from filings with source-linked evidence. Existing
 financial-statement conflicts and stale inputs still require resolution. Forward
 estimates, growth scenarios, DCF and sector-relative valuation remain later phases.
+
+## Actionable market-cap readiness
+
+Packets include `market_cap_evidence_plan`: outstanding requirements with specific
+evidence requests, plus the exact interval after the selected share-count date
+through the selected price date. In-window observed split IDs are listed for
+review; they never prove the interval is complete. The Markdown report renders
+these requests so another analyst or agent can continue the investigation.
+
+The prerequisite list includes positive, fresh price and share quantities.
+Both stale inputs are reported independently. Presence of a quantity alone is
+not readiness. A `ready` market-cap plan says nothing about complete debt,
+preferred equity, minority interest or earnings denominators needed by other
+valuation metrics.

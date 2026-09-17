@@ -18,10 +18,23 @@ from typing import Any
 from .models import EvidenceFact, IssueSeverity, ResearchIssue
 
 _SCHEMA_VERSION = 1
-_OUTPUTS = {"current_shares", "total_debt"}
+_OUTPUTS = {"current_share_price", "current_shares", "total_debt"}
 _SHARE_ATTESTATIONS = {"point_in_time_common_shares", "raw_as_reported_basis"}
+_PRICE_ATTESTATIONS = {
+    "listing_currency",
+    "non_dividend_adjusted_quote",
+    "quote_date_split_basis",
+}
 _DEBT_ATTESTATIONS = {"complete_interest_bearing_debt"}
 _DISJOINT = "disjoint_scopes"
+
+_PRICE_METRICS = {"close", "regular_market_price", "market_price"}
+_PRICE_BASIS_ALLOWLIST = {
+    "raw_quote",
+    "unadjusted_quote",
+    "split_adjusted",
+    "vendor_split_adjusted",
+}
 
 _SHARE_CONCEPTS = {
     "dei:EntityCommonStockSharesOutstanding",
@@ -192,6 +205,7 @@ def draft_review_manifest(
     """Return a bound pending-review draft; it never contains applied rules."""
 
     reported = _reported(facts)
+    price_candidates = [fact for fact in reported if _price_source_allowed(fact)]
     share_candidates = [fact for fact in reported if _share_source_allowed(fact)]
     debt_candidates = [fact for fact in reported if _debt_source_allowed(fact)]
     return {
@@ -204,16 +218,19 @@ def draft_review_manifest(
         "reviewer": {"name": "", "reviewed_at": "", "rationale": ""},
         "rules": [],
         "candidates": {
+            "current_share_price": [_candidate_summary(fact) for fact in price_candidates],
             "current_shares": [_candidate_summary(fact) for fact in share_candidates],
             "total_debt": [_candidate_summary(fact) for fact in debt_candidates],
         },
         "required_attestations": {
+            "current_share_price": sorted(_PRICE_ATTESTATIONS),
             "current_shares": sorted(_SHARE_ATTESTATIONS),
             "total_debt": sorted(_DEBT_ATTESTATIONS),
             "sum_operation_additional": [_DISJOINT],
         },
         "unresolved_gaps": [
             "Analyst review and rationale are required; no candidate is selected automatically.",
+            "Current-price promotion records an analyst-reviewed quote-date split basis; it does not establish class, ADR, or complete split-history proofs.",
             "Current-share promotion does not prove all-class coverage, ADR conversion, or split history.",
             "Missing debt or share quantities are never filled with zero.",
         ],
@@ -315,7 +332,11 @@ def _validate_rule(
             reasons.append("summed inputs must have identical units and periods")
         if _DISJOINT not in attestations:
             reasons.append("sum requires disjoint_scopes attestation")
-    required = _SHARE_ATTESTATIONS if output == "current_shares" else _DEBT_ATTESTATIONS
+    required = {
+        "current_share_price": _PRICE_ATTESTATIONS,
+        "current_shares": _SHARE_ATTESTATIONS,
+        "total_debt": _DEBT_ATTESTATIONS,
+    }.get(output, set())
     if not required <= attestations:
         reasons.append(f"missing attestations: {', '.join(sorted(required - attestations))}")
     review_time = _parse_cutoff(reviewed_at)
@@ -325,7 +346,12 @@ def _validate_rule(
         for fact in selected
     ):
         reasons.append("review predates an input's evidence availability")
-    if output == "current_shares":
+    if output == "current_share_price":
+        if operation != "copy":
+            reasons.append("current_share_price initially supports copy only")
+        if any(not _price_source_allowed(fact) for fact in selected):
+            reasons.append("current_share_price inputs must be positive ISO-currency per-share close or raw market-quote facts with an explicit non-dividend split basis")
+    elif output == "current_shares":
         if operation != "copy":
             reasons.append("current_shares initially supports copy only")
         if any(not _share_source_allowed(fact) for fact in selected):
@@ -374,8 +400,12 @@ def _promote(
         "source_url": source.source_url,
         "accession": source.accession,
         "source_tag": f"reviewed-input:{rule['rule_id']}",
-        "definition": _reviewed_definition(output, operation, reviewer, rule),
-        "adjustment_basis": "as_reported" if output == "current_shares" else "reviewed_analyst_assertion",
+        "definition": _reviewed_definition(output, operation, reviewer, rule, inputs),
+        "adjustment_basis": (
+            "current_quote"
+            if output == "current_share_price"
+            else "as_reported" if output == "current_shares" else "reviewed_analyst_assertion"
+        ),
         "kind": "calculated",
         "formula": f"reviewed_{operation}({', '.join(fact.fact_id for fact in inputs)})",
         "input_fact_ids": [fact.fact_id for fact in inputs],
@@ -391,6 +421,39 @@ def _share_source_allowed(fact: EvidenceFact) -> bool:
         and "weighted_average" not in fact.metric.casefold()
         and "WeightedAverage" not in tag
     )
+
+
+def _price_source_allowed(fact: EvidenceFact) -> bool:
+    """Accept only an explicit raw quote or split-only price observation.
+
+    Yahoo's reported ``close`` currently carries ``vendor_split_adjusted``;
+    its ``close_adjusted`` carries ``split_dividend_adjusted`` and must never
+    be promoted as a current share price.
+    """
+
+    basis = (fact.adjustment_basis or "").strip().casefold()
+    return (
+        fact.metric in _PRICE_METRICS
+        and bool(re.fullmatch(r"[A-Z]{3}/share", fact.unit))
+        and fact.period_start is None
+        and basis in _PRICE_BASIS_ALLOWLIST
+        and not _has_disallowed_price_adjustment_marker(fact)
+        and float(fact.value) > 0
+    )
+
+
+def _has_disallowed_price_adjustment_marker(fact: EvidenceFact) -> bool:
+    """Reject adjusted/total-return labels without treating "not adjusted" as one."""
+
+    for field in (fact.definition or "", fact.source_tag or ""):
+        text = re.sub(r"[\s_/-]+", " ", field).casefold()
+        for marker in ("dividend adjusted", "total return adjusted", "total return", "adjusted close", "adj close"):
+            # Remove only the negated occurrence, not every occurrence of a
+            # marker merely because a negation appears elsewhere in the text.
+            remaining = re.sub(r"\bnot " + re.escape(marker) + r"\b", "", text)
+            if marker in remaining:
+                return True
+    return False
 
 
 def _debt_source_allowed(fact: EvidenceFact) -> bool:
@@ -433,15 +496,42 @@ def _reviewed_definition(
     operation: str,
     reviewer: dict[str, Any],
     rule: dict[str, Any],
+    inputs: list[EvidenceFact],
 ) -> str:
     scope = (
         "The reviewer attests this is complete interest-bearing debt including all obligations. "
         if output == "total_debt"
-        else "The reviewer attests this is a raw point-in-time common-share quantity; class, ADR, and split proofs remain separate. "
+        else (
+            "The reviewer attests this is a raw point-in-time common-share quantity; class, ADR, and split proofs remain separate. "
+            if output == "current_shares"
+            else (
+                "The reviewer attests to the listing currency, dividend-unadjusted quote, "
+                "and quote-date split basis. The promoted current_quote basis is an analyst "
+                "assertion, not an independently verified source property; source adjustment "
+                f"basis is retained as {inputs[0].adjustment_basis!r}. Class, ADR, and complete "
+                "split-history proofs remain separate. "
+            )
+        )
     )
+    rule_rationale = str(rule["rationale"])
+    reviewer_rationale = str(reviewer["rationale"])
+    if output == "current_share_price":
+        rule_rationale = _price_definition_text(rule_rationale)
+        reviewer_rationale = _price_definition_text(reviewer_rationale)
     return (
         f"Reviewed analyst assertion by {reviewer['name']}; {operation} promotion to {output}. "
-        f"{scope}Rule rationale: {rule['rationale']} Review rationale: {reviewer['rationale']}"
+        f"{scope}Rule rationale: {rule_rationale} Review rationale: {reviewer_rationale}"
+    )
+
+
+def _price_definition_text(value: str) -> str:
+    """Avoid false dividend-adjusted hits in capitalization's rendered lineage."""
+
+    return re.sub(
+        r"\b(?:non|not)[\s_-]+dividend[\s_-]+adjusted\b",
+        "dividend-unadjusted",
+        value,
+        flags=re.IGNORECASE,
     )
 
 

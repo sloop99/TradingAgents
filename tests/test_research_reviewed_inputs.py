@@ -20,6 +20,8 @@ def fact(
     unit: str,
     end: str = "2026-06-30",
     start: str | None = None,
+    basis: str = "as_reported",
+    definition: str | None = None,
 ) -> EvidenceFact:
     return EvidenceFact.from_dict({
         "fact_id": fact_id,
@@ -33,8 +35,8 @@ def fact(
         "source_url": f"https://example.test/{fact_id}",
         "accession": "0001000000-26-000001",
         "source_tag": source_tag,
-        "definition": metric,
-        "adjustment_basis": "as_reported",
+        "definition": definition or metric,
+        "adjustment_basis": basis,
         "kind": "reported",
     })
 
@@ -83,6 +85,19 @@ def promoted(result: ReviewedInputsResult, metric: str) -> EvidenceFact | None:
     return next((fact for fact in result.derived_facts if fact.metric == metric), None)
 
 
+@pytest.mark.parametrize("definition,tag", [
+    ("Not dividend adjusted in one series; dividend adjusted in this series", "yahoo:close"),
+    ("Not dividend adjusted", "yahoo:dividend_adjusted"),
+    ("Split/dividend-adjusted quote", "yahoo:close"),
+    ("Historical quote", "yahoo:adjusted_close"),
+])
+def test_contradictory_adjustment_labels_cannot_hide_behind_negation(definition, tag):
+    source = fact("price", "close", tag, 42, unit="USD/share",
+                  basis="vendor_split_adjusted", definition=definition)
+    draft = draft_review_manifest([source], "TEST", "2026-09-16")
+    assert draft["candidates"]["current_share_price"] == []
+
+
 @pytest.mark.unit
 def test_valid_review_copies_shares_and_sums_debt_with_full_lineage():
     facts = base_facts()
@@ -102,6 +117,141 @@ def test_valid_review_copies_shares_and_sums_debt_with_full_lineage():
     assert result.summary["applied_metrics"] == ["current_shares", "total_debt"]
     assert {item.metric for item in result.derived_facts} == {"current_shares", "total_debt"}
     assert "share_class_completeness" in result.summary["unresolved_proofs"]
+
+
+@pytest.mark.unit
+def test_valid_price_review_promotes_an_attested_current_quote_and_retains_source_basis():
+    price = fact(
+        "close", "close", "yahoo_daily_close", 42.25,
+        unit="USD/share", end="2026-09-15", basis="vendor_split_adjusted",
+    )
+    facts = base_facts() + [price]
+    review = manifest(facts)
+    review["rules"].append({
+        "rule_id": "price-review",
+        "output_metric": "current_share_price",
+        "operation": "copy",
+        "input_fact_ids": ["close"],
+        "attestations": ["listing_currency", "non_dividend_adjusted_quote", "quote_date_split_basis"],
+        "rationale": "Verified USD listing currency and a dividend-unadjusted Yahoo close.",
+    })
+
+    result = apply_reviewed_inputs(facts, review, "TEST", "2026-09-16")
+    promoted_price = promoted(result, "current_share_price")
+    assert promoted_price.value == 42.25
+    assert promoted_price.unit == "USD/share"
+    assert promoted_price.adjustment_basis == "current_quote"
+    assert promoted_price.input_fact_ids == ("close",)
+    assert "listing currency" in promoted_price.definition
+    assert "'vendor_split_adjusted'" in promoted_price.definition
+    assert "dividend adjusted" not in promoted_price.definition.replace("-", " ").casefold()
+
+    draft = draft_review_manifest(facts, "TEST", "2026-09-16")
+    assert [item["fact_id"] for item in draft["candidates"]["current_share_price"]] == ["close"]
+    assert draft["required_attestations"]["current_share_price"] == [
+        "listing_currency", "non_dividend_adjusted_quote", "quote_date_split_basis",
+    ]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("metric", "unit", "value", "basis"),
+    [
+        ("close_adjusted", "USD/share", 42.25, "split_dividend_adjusted"),
+        ("close", "USD/share", 42.25, "split_dividend_adjusted"),
+        ("close", "native_currency/share", 42.25, "vendor_split_adjusted"),
+        ("regular_market_price", "USD/share", 0, "raw_quote"),
+        ("market_price", "USD/share", -1, "raw_quote"),
+        ("market_price", "USD/share", 42.25, "as_reported"),
+    ],
+)
+def test_price_review_rejects_adjusted_ambiguous_currency_or_nonpositive_sources(metric, unit, value, basis):
+    price = fact("price", metric, "market_quote", value, unit=unit, basis=basis)
+    review = manifest([price])
+    review["rules"] = [{
+        "rule_id": "bad-price",
+        "output_metric": "current_share_price",
+        "operation": "copy",
+        "input_fact_ids": ["price"],
+        "attestations": ["listing_currency", "non_dividend_adjusted_quote", "quote_date_split_basis"],
+        "rationale": "Attempted price promotion.",
+    }]
+
+    result = apply_reviewed_inputs([price], review, "TEST", "2026-09-16")
+    assert result.summary["status"] == "rejected"
+    assert promoted(result, "current_share_price") is None
+    assert draft_review_manifest([price], "TEST", "2026-09-16")["candidates"]["current_share_price"] == []
+
+
+@pytest.mark.unit
+def test_price_review_requires_listing_currency_non_dividend_and_quote_date_basis_attestations():
+    price = fact("price", "regular_market_price", "market_quote", 42.25, unit="USD/share", basis="raw_quote")
+    review = manifest([price])
+    review["rules"] = [{
+        "rule_id": "missing-price-attestations",
+        "output_metric": "current_share_price",
+        "operation": "copy",
+        "input_fact_ids": ["price"],
+        "attestations": ["listing_currency"],
+        "rationale": "Quote lacks the required attestation.",
+    }]
+
+    result = apply_reviewed_inputs([price], review, "TEST", "2026-09-16")
+    assert not result.derived_facts
+    assert "non_dividend_adjusted_quote" in result.summary["rule_decisions"][0]["reasons"][0]
+    assert "quote_date_split_basis" in result.summary["rule_decisions"][0]["reasons"][0]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("source_tag", "definition", "start"),
+    [
+        ("market_quote", "Vendor dividend-adjusted close.", None),
+        ("market_quote_total_return_adjusted", "Vendor close.", None),
+        ("market_quote", "Vendor close.", "2026-09-01"),
+        ("market_quote", "Vendor close.", None),
+    ],
+)
+def test_price_review_rejects_hidden_adjustments_durations_and_unknown_split_basis(source_tag, definition, start):
+    basis = "unknown_split_basis" if source_tag == "market_quote" and definition == "Vendor close." and start is None else "vendor_split_adjusted"
+    price = fact(
+        "price", "close", source_tag, 42.25, unit="USD/share", basis=basis,
+        definition=definition, start=start,
+    )
+    review = manifest([price])
+    review["rules"] = [{
+        "rule_id": "bad-price-source",
+        "output_metric": "current_share_price",
+        "operation": "copy",
+        "input_fact_ids": ["price"],
+        "attestations": ["listing_currency", "non_dividend_adjusted_quote", "quote_date_split_basis"],
+        "rationale": "Attempted price promotion.",
+    }]
+
+    result = apply_reviewed_inputs([price], review, "TEST", "2026-09-16")
+    assert not result.derived_facts
+    assert draft_review_manifest([price], "TEST", "2026-09-16")["candidates"]["current_share_price"] == []
+
+
+@pytest.mark.unit
+def test_price_review_allows_an_explicit_not_dividend_adjusted_source_label():
+    price = fact(
+        "price", "market_price", "market_quote", 42.25, unit="USD/share", basis="raw_quote",
+        definition="Vendor states this is not dividend adjusted.",
+    )
+    review = manifest([price])
+    review["rules"] = [{
+        "rule_id": "not-adjusted-price",
+        "output_metric": "current_share_price",
+        "operation": "copy",
+        "input_fact_ids": ["price"],
+        "attestations": ["listing_currency", "non_dividend_adjusted_quote", "quote_date_split_basis"],
+        "rationale": "Reviewed the provider's explicit non-dividend-adjusted label.",
+    }]
+
+    promoted_price = promoted(apply_reviewed_inputs([price], review, "TEST", "2026-09-16"), "current_share_price")
+    assert promoted_price is not None
+    assert "dividend adjusted" not in promoted_price.definition.replace("-", " ").casefold()
 
 
 @pytest.mark.unit

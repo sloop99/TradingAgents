@@ -94,3 +94,44 @@ def test_explicit_complete_debt_review_reaches_net_debt_calculator():
     packet = build_packet("WIDE", "2026-09-16", [DebtProvider()], review_manifest=review)
     assert next(f for f in packet.facts if f.metric == "net_debt").value == 300
     assert not any(f.metric == "enterprise_value" for f in packet.facts)
+
+
+def test_reviewed_quote_and_shares_expose_exact_split_interval_without_unlocking_cap():
+    payload = Provider().fetch("WIDE", "2026-09-16")
+    payload["facts"].append(dict(payload["facts"][0], fact_id="quote", metric="close", value=25,
+                                 unit="USD/share", period_end="2026-09-15", source_tag="yahoo:close",
+                                 source_url="https://example.test/quote", adjustment_basis="vendor_split_adjusted"))
+
+    class QuoteProvider:
+        def fetch(self, ticker, as_of):
+            return payload
+
+    base = build_packet("WIDE", "2026-09-16", [QuoteProvider()])
+    review = manifest(base)
+    review["rules"].append({"rule_id": "quote-review", "output_metric": "current_share_price",
+                            "operation": "copy", "input_fact_ids": ["quote"],
+                            "attestations": ["listing_currency", "non_dividend_adjusted_quote", "quote_date_split_basis"],
+                            "rationale": "Synthetic quote verified on its observation date's split basis in USD."})
+    packet = build_packet("WIDE", "2026-09-16", [QuoteProvider()], review_manifest=review)
+    quote = next(f for f in packet.facts if f.metric == "current_share_price")
+    assert quote.value == 25 and quote.input_fact_ids == ("quote",)
+    plan = packet.financial_analysis["capitalization"]["market_cap_evidence_plan"]
+    assert plan["split_interval"]["end_inclusive"] == "2026-09-15"
+    assert not plan["ready"]
+    assert "share_class_coverage_ratio_equal_1" in {r["requirement"] for r in plan["outstanding"]}
+    assert not any(f.metric == "market_cap" for f in packet.facts)
+    assert "Required split interval:" in packet.to_markdown()
+    assert ResearchPacket.from_dict(packet.to_dict()).to_dict() == packet.to_dict()
+    # Controlled positive path: these proof facts are synthetic, not inferred
+    # from a real listing or an absent vendor action.
+    for metric in ("share_class_coverage_ratio", "adr_ratio", "split_history_complete"):
+        payload["facts"].append(dict(payload["facts"][0], fact_id=metric, metric=metric,
+                                     value=1, unit="ratio", period_end="2026-09-15",
+                                     period_start="2026-07-28" if metric == "split_history_complete" else None,
+                                     source_tag="test:proof", source_url=f"https://example.test/{metric}"))
+    updated = build_packet("WIDE", "2026-09-16", [QuoteProvider()])
+    review["base_evidence_sha256"] = evidence_sha256(updated.facts)
+    complete = build_packet("WIDE", "2026-09-16", [QuoteProvider()], review_manifest=review)
+    assert complete.financial_analysis["capitalization"]["market_cap_evidence_plan"]["ready"], [i.to_dict() for i in complete.issues]
+    assert next(f for f in complete.facts if f.metric == "market_cap").value == 1234 * 25
+    assert complete.financial_analysis["capitalization"]["market_cap_evidence_plan"]["ready"]

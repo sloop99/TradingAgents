@@ -281,3 +281,23 @@ review. A synthetic test exercises reviewed debt through net-debt calculation.
 Complete debt scope and class/ADR/split proofs remain separate requirements;
 verified live enterprise values remain unavailable for this sample.
 Regression: 755 passed, 2 optional skips, 70 subtests passed; Ruff passed.
+
+### Price review and actionable valuation readiness (2026-09-16)
+
+Review manifests now support sourced price copies with explicit currency,
+non-dividend-adjusted quote and quote-date split-basis assertions. Original
+observations remain available, and no class, ADR or split-completeness proof is
+inferred. Historical vendor prices cannot become current-basis inputs merely
+because their metric is named `close`.
+
+Capitalization reports now list specific outstanding evidence requests and the
+exact shares-to-price split interval, including observed in-window split IDs.
+Freshness and positivity are explicit prerequisites; stale price and share
+inputs are both diagnosed rather than short-circuiting after the first failure.
+An evidence plan marked ready applies only to market cap, not all valuation
+metrics. Cached six-issuer replay artifacts are in
+`.tradingagents/validation/valuation-readiness/`.
+Six cached packets passed replay and roundtrip checks, with 30 eligible price
+candidates each and no automatic price promotion. A synthetic complete-proof
+pipeline calculates market cap from reviewed price and shares. Regression:
+775 passed, 2 optional skips and 70 subtests passed; Ruff passed.

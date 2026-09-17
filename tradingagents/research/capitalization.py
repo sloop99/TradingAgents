@@ -130,6 +130,7 @@ def analyze_capitalization(
         "adr_ratio_equal_1": False,
         "split_history_complete": False,
         "matching_currency_and_split_basis": False,
+        "fresh_positive_price_and_shares": False,
     }
     if price is None:
         _missing(issues, "current_share_price", "a verified current_share_price fact")
@@ -154,9 +155,9 @@ def analyze_capitalization(
         price_currency = _price_currency(price.unit)
         share_unit_ok = _norm(shares.unit) in {"share", "shares"}
         price_basis = _basis_group(price)
-        fresh = _fresh(price, cutoff.date(), PRICE_MAX_AGE_DAYS, "share price", issues) and _fresh(
-            shares, cutoff.date(), SHARES_MAX_AGE_DAYS, "current shares", issues
-        )
+        price_fresh = _fresh(price, cutoff.date(), PRICE_MAX_AGE_DAYS, "share price", issues)
+        shares_fresh = _fresh(shares, cutoff.date(), SHARES_MAX_AGE_DAYS, "current shares", issues)
+        fresh = price_fresh and shares_fresh
         positive = True
         if float(price.value) <= 0 or float(shares.value) <= 0:
             positive = False
@@ -165,6 +166,7 @@ def analyze_capitalization(
             issues.append(_issue("PRICE_CURRENCY_UNRESOLVED", "current_share_price must use an explicit ISO currency-per-share unit such as USD/share.", IssueSeverity.WARNING, "market_cap"))
         if not share_unit_ok:
             issues.append(_issue("SHARE_UNIT_INVALID", "current_shares must use the unit shares.", IssueSeverity.WARNING, "market_cap"))
+        cap_prerequisites["fresh_positive_price_and_shares"] = fresh and positive
         reconciled_shares = _reconcile_splits(shares, price, split_complete, eligible, issues)
         if reconciled_shares is not None:
             cap_prerequisites["split_history_complete"] = True
@@ -312,6 +314,7 @@ def analyze_capitalization(
             _summary_fact(f) for f in eligible if _metric(f) in _NCI_CANDIDATE_METRICS
         ],
         "market_cap_prerequisites": cap_prerequisites,
+        "market_cap_evidence_plan": _evidence_plan(cap_prerequisites, price, shares, eligible),
         "missing_metrics": sorted(intended - produced),
         "assumptions": {
             "price_max_age_days": PRICE_MAX_AGE_DAYS,
@@ -374,6 +377,39 @@ def _observation_summary(facts: list[EvidenceFact]) -> dict[str, list[dict[str, 
         "market_shares": _OBSERVED_SHARE_METRICS,
     }
     return {name: [_summary_fact(f) for f in facts if _metric(f) in metrics] for name, metrics in groups.items()}
+
+
+def _evidence_plan(prerequisites, price, shares, facts):
+    """Explain outstanding gates without converting observations into proof."""
+    actions = {
+        "current_share_price": "Review a sourced, currency-identified quote on the price date's split basis; exclude dividend-adjusted prices.",
+        "current_shares": "Review a sourced point-in-time common-share count, not weighted-average shares.",
+        "share_class_coverage_ratio_equal_1": "Establish all outstanding common classes and their economic conversion; a single listed class does not prove complete coverage.",
+        "adr_ratio_equal_1": "Establish that the quoted security and counted shares have a one-to-one conversion; do not infer non-ADR status from ticker alone.",
+        "split_history_complete": "Obtain sourced complete split coverage from the share-count date through the quote date; an empty vendor event list is insufficient.",
+        "matching_currency_and_split_basis": "Reconcile raw reported shares through the complete split interval onto the quote basis and verify currency per share.",
+        "fresh_positive_price_and_shares": "Use positive price and share quantities within the configured freshness limits.",
+    }
+    interval = None
+    if price and shares:
+        interval = {
+            "start_exclusive": shares.period_end,
+            "end_inclusive": price.period_end,
+            "valid_order": shares.period_end <= price.period_end,
+            "share_fact_id": shares.fact_id,
+            "price_fact_id": price.fact_id,
+            "observed_split_fact_ids": sorted(
+                f.fact_id for f in facts
+                if _metric(f) == "split_ratio" and shares.period_end < f.period_end <= price.period_end
+            ),
+            "absence_of_events_proves_no_split": False,
+        }
+    return {
+        "ready": all(prerequisites.values()),
+        "outstanding": [{"requirement": key, "action": actions[key]}
+                        for key, satisfied in prerequisites.items() if not satisfied],
+        "split_interval": interval,
+    }
 
 
 def _reconcile_splits(

@@ -509,6 +509,15 @@ class ResearchPacket:
                           "Withheld metrics: " + (", ".join(capitalization.get("missing_metrics", [])) or "none") + ".", ""])
             for requirement, satisfied in capitalization.get("market_cap_prerequisites", {}).items():
                 lines.append(f"- {requirement}: {'supported' if satisfied else 'unresolved'}")
+            plan = capitalization.get("market_cap_evidence_plan", {})
+            interval = plan.get("split_interval")
+            if interval:
+                lines.extend(["", f"Required split interval: after {interval['start_exclusive']} through {interval['end_inclusive']} (inclusive).",
+                              "Observed events alone do not establish complete split coverage."])
+            if plan.get("outstanding"):
+                lines.extend(["", "Evidence needed:", ""])
+                for requirement in plan["outstanding"]:
+                    lines.append(f"- {requirement['action']}")
         reviewed = self.financial_analysis.get("reviewed_inputs", {})
         if reviewed.get("status") not in (None, "not_provided"):
             lines.extend(["", "## Reviewed capital inputs", "",

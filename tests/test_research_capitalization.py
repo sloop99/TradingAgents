@@ -90,6 +90,31 @@ def test_vendor_market_cap_shares_and_close_are_observations_only():
     assert result.summary["provider_observations"]["reported_market_cap"][0]["fact_id"] == "vendor-cap"
 
 
+def test_evidence_plan_tracks_split_interval_without_inventing_completeness():
+    inputs = [f for f in closed_inputs() if f.metric != "split_history_complete"]
+    inputs.append(fact("outside", "split_ratio", 3, "2026-01-31", unit="ratio"))
+    result = analyze_capitalization(inputs, BusinessModel.GENERAL, "2026-04-01")
+    plan = result.summary["market_cap_evidence_plan"]
+    assert not plan["ready"]
+    assert plan["split_interval"]["start_exclusive"] == "2026-01-31"
+    assert plan["split_interval"]["end_inclusive"] == "2026-03-31"
+    assert plan["split_interval"]["observed_split_fact_ids"] == ["split"]
+    assert plan["split_interval"]["absence_of_events_proves_no_split"] is False
+    assert "split_history_complete" in {item["requirement"] for item in plan["outstanding"]}
+    complete = analyze_capitalization(closed_inputs(), BusinessModel.GENERAL, "2026-04-01")
+    assert complete.summary["market_cap_evidence_plan"]["ready"]
+    assert complete.summary["market_cap_evidence_plan"]["outstanding"] == []
+
+
+def test_stale_inputs_are_both_reported_and_readiness_stays_false():
+    result = analyze_capitalization(closed_inputs(), BusinessModel.GENERAL, "2026-09-01")
+    stale = [i.metric for i in result.issues if i.code == "STALE_CAPITALIZATION_INPUT"]
+    assert "current_share_price" in stale and "current_shares" in stale
+    assert not result.summary["market_cap_evidence_plan"]["ready"]
+    assert not result.summary["market_cap_prerequisites"]["fresh_positive_price_and_shares"]
+    assert derived(result, "market_cap") is None
+
+
 @pytest.mark.unit
 def test_missing_split_completeness_withholds_cap_and_event_before_shares_is_ignored():
     missing = [f for f in closed_inputs() if f.metric != "split_history_complete"]

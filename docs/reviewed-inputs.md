@@ -51,6 +51,15 @@ reviews return exit code 2, with the diagnostic packet preserved.
 
 ## Supported mappings and boundaries
 
+- `current_share_price`: copy a positive reported `close`, `regular_market_price`
+  or `market_price` with an explicit currency-per-share unit and recognized quote
+  basis. Requires `listing_currency`, `non_dividend_adjusted_quote` and
+  `quote_date_split_basis` attestations. The reviewer must establish that the
+  value uses the quote date's split basis; later downloaded historical series
+  may incorporate later splits. Dividend/total-return-adjusted prices and
+  ambiguous adjustment labels are ineligible. This remains an analyst assertion,
+  not independent vendor-price verification. Original source basis stays in
+  source lineage; the reviewed input records the asserted current-quote basis.
 - `current_shares`: copy a supported, reported point-in-time common-share count.
   Weighted-average shares and custom concepts are ineligible. This does not
   establish coverage of all classes, ADR conversion or complete split history.
@@ -64,7 +73,7 @@ Dates, currencies, source IDs, quantities and lineage remain attached. Known
 parent/component overlap, duplicate rules or output metrics, reused source nodes,
 incompatible units and evidence changes cause rejection. Rules cannot introduce
 numeric constants or turn missing data into zero. The layer does not promote
-price, class-coverage, ADR or split-history proofs. Capitalization still applies
+class-coverage, ADR or split-history proofs. Capitalization still applies
 its independent readiness checks.
 
 ## Validation
