@@ -414,6 +414,8 @@ def extract_filing_evidence(
                 "value": numeric["value"],
                 "unit": unit["canonical"],
                 "unit_measures": unit["measures"],
+                "source_sha256": source_hash,
+                "context_signature": context["signature"],
                 "period_start": context.get("period_start"),
                 "period_end": context["period_end"],
                 "period_type": context["period_type"],

@@ -440,6 +440,9 @@ class ResearchPacket:
         listing_groups = self.financial_analysis.get("listing_evidence", {}).get("groups", [])
         if listing_groups:
             lines.append(f"Listed-security evidence: {len(listing_groups)} filing context groups retained; these do not establish all-class coverage, ADR conversion or split completeness.")
+        inventory = self.financial_analysis.get("share_inventory", {})
+        if inventory.get("counts", {}).get("bound_observations"):
+            lines.append("Share inventory retains outstanding, issued, authorized and treasury quantities separately; candidate listing associations do not establish complete coverage.")
         for fact in selected:
             period = fact.period_end
             if fact.period_start:
@@ -542,6 +545,19 @@ class ResearchPacket:
             lines.extend(["", "Class completeness, ADR conversion and complete split coverage remain unestablished by these listings."])
         filing_candidates = [fact for fact in self.facts
                              if fact.kind is FactKind.REPORTED and fact.metric.startswith("filing_")]
+        inventory = self.financial_analysis.get("share_inventory", {})
+        if inventory.get("counts", {}).get("bound_observations") or inventory.get("split_candidates"):
+            lines.extend(["", "## Share-class inventory", "",
+                          "Quantities retain their reported dates and scopes. Issued, authorized and treasury shares are not substitutes for outstanding shares.", ""])
+            for role, observations in inventory.get("observations", {}).items():
+                for observation in observations:
+                    dimensions = ", ".join(f"{key}={value}" for key, value in observation.get("dimensions", {}).items()) or "unallocated issuer scope"
+                    lines.append(f"- {role}: {observation['value']} {observation['unit']} at {observation['period_end']}; {dimensions}; {observation['source_url']}")
+            lines.extend(["", "Listing associations require an exact supported class-dimension match. Different dates remain different observations; no complete class inventory is inferred."])
+            if inventory.get("split_candidates"):
+                lines.extend(["", "Reported split candidates (filing periods do not establish event-effective dates):", ""])
+                for candidate in inventory["split_candidates"]:
+                    lines.append(f"- {candidate['value']} {candidate['unit']}; period ends {candidate['period_end']}; {candidate['source_url']}")
         if filing_candidates:
             lines.extend(["", "## Filing context review", "",
                           f"{len(filing_candidates)} inline filing candidates retained with source anchors and context definitions.",

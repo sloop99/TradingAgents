@@ -82,6 +82,34 @@ def test_inline_filing_preserves_classes_context_and_deterministic_provenance():
     accepted = [item for item in result["metadata"]["candidates"] if item["status"] == "accepted"]
     assert {item["fact_id"] for item in accepted} == {fact["fact_id"] for fact in facts}
     assert "733,713,653" in accepted[0]["snippet"]
+    assert all(item["source_sha256"] == result["metadata"]["source_sha256"] for item in accepted)
+    assert all(item["context_signature"] == result["metadata"]["contexts"][item["context_id"]]["signature"] for item in accepted)
+
+
+def test_share_inventory_is_connected_to_packet_without_promoting_class_coverage():
+    from tradingagents.research import ResearchPacket, build_packet
+
+    parsed = extract(filing(
+        '<ix:nonFraction id="outstanding" name="us-gaap:CommonStockSharesOutstanding" contextRef="class-a" unitRef="shares">100</ix:nonFraction>',
+        '<ix:nonFraction id="authorized" name="us-gaap:CommonStockSharesAuthorized" contextRef="class-a" unitRef="shares">1000</ix:nonFraction>',
+        '<ix:nonNumeric id="title" name="dei:Security12bTitle" contextRef="class-a">Class A common stock</ix:nonNumeric>',
+        '<ix:nonNumeric id="symbol" name="dei:TradingSymbol" contextRef="class-a">TEST</ix:nonNumeric>',
+        '<ix:nonNumeric id="exchange" name="dei:SecurityExchangeName" contextRef="class-a">Nasdaq</ix:nonNumeric>',
+    ))
+
+    class Provider:
+        def fetch(self, ticker, as_of):
+            return {**parsed, "identity": {"ticker": ticker, "cik": CIK},
+                    "metadata": {"filings": [parsed["metadata"]]}}
+
+    packet = build_packet("TEST", "2026-09-16", [Provider()])
+    inventory = packet.financial_analysis["share_inventory"]
+    assert inventory["observations"]["outstanding"][0]["value"] == 100
+    assert inventory["observations"]["authorized"][0]["value"] == 1000
+    assert inventory["listing_links"]
+    assert "Share-class inventory" in packet.to_markdown()
+    assert not any(f.metric in {"share_class_coverage_ratio", "split_history_complete"} for f in packet.facts)
+    assert ResearchPacket.from_dict(packet.to_dict()).to_dict() == packet.to_dict()
 
 
 @pytest.mark.unit

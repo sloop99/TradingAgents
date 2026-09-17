@@ -74,6 +74,10 @@ optional user thesis. Produce structured evidence plus a readable coverage repor
 4. Valuation and expectations: appropriate DCF/reverse DCF and comparable methods,
    explicit assumptions, scenario returns and guidance history. Historical consensus
    estimates remain optional until their cost and point-in-time quality are justified.
+   The requested [analyst expectations module](analyst-expectations-roadmap.md)
+   will separate firm-attributed targets from vendor consensus, with mean, median,
+   range, coverage count, age and horizon checks. Prefer free sources and cached
+   evidence; do not assume a fixed top-ten firm universe.
 5. Market/portfolio context: relative performance, sector rotation, breadth,
    correlations and concentration. Do not infer fund flows from price changes.
 6. Monitoring and evaluation: quarterly thesis changes, forecast accuracy, source
@@ -316,3 +320,19 @@ while all 388 existing numeric facts were reproduced exactly. This supplies
 reviewable listing evidence for generic stock inputs; equity-note class coverage
 and complete split-history evidence still need separate reconciliation.
 Regression: 792 passed, 2 optional skips and 70 subtests passed; Ruff passed.
+
+### Share inventory and analyst-expectations roadmap
+
+The [share inventory](share-inventory.md) separates outstanding, issued,
+authorized and treasury quantities, with strict source/context binding. Listing
+associations require exact supported class dimensions; empty or ambiguous scopes
+remain unallocated. Split ratios are candidates only until effective dates and
+complete event coverage are established.
+
+The six cached filings supplied 60 point-in-time share observations, with all
+388 numeric source facts unchanged. No automatic listing-to-share association
+was justified in this real sample; a controlled fixture tests that path.
+The [analyst expectations roadmap](analyst-expectations-roadmap.md) records the
+requested named-firm average, median, range and coverage count, separately from
+vendor consensus. Analyst data collection is not implemented in this phase.
+Regression: 805 passed, 2 optional skips and 70 subtests passed; Ruff passed.

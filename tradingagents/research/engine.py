@@ -22,6 +22,7 @@ from .models import (
 )
 from .reconciliation import reconcile_facts
 from .reviewed_inputs import apply_reviewed_inputs
+from .share_inventory import analyze_share_inventory
 
 _EXCHANGE_ALIASES = {
     "nasdaq": "Nasdaq",
@@ -228,6 +229,10 @@ def build_packet(
             metric="free_cash_flow",
         ))
     business_model, _ = classify_business(identity)
+    listing_summary = summarize_listing_evidence(
+        filing_metadata, documents, normalized_ticker,
+        identity.cik if identity else None, normalized_as_of)
+    share_inventory = analyze_share_inventory(facts, filing_metadata, listing_summary, normalized_as_of)
     filing_review = analyze_filing_contexts(facts, filing_metadata, normalized_as_of)
     issues.extend(filing_review.issues)
     financials = analyze_financials(reconciled.selected_facts, business_model)
@@ -303,9 +308,8 @@ def build_packet(
             "summary": financials.summary,
             "capitalization": capitalization.summary,
             "filing_reconciliation": filing_review.summary,
-            "listing_evidence": summarize_listing_evidence(
-                filing_metadata, documents, normalized_ticker,
-                identity.cik if identity else None, normalized_as_of),
+            "listing_evidence": listing_summary,
+            "share_inventory": share_inventory,
             "reviewed_inputs": reviewed.summary,
         },
     )
