@@ -69,3 +69,24 @@ Both stale inputs are reported independently. Presence of a quantity alone is
 not readiness. A `ready` market-cap plan says nothing about complete debt,
 preferred equity, minority interest or earnings denominators needed by other
 valuation metrics.
+
+## Complete valuation audit
+
+`financial_analysis.capitalization.valuation_readiness` evaluates market cap,
+net debt, enterprise value, P/E, EV/revenue and price/free cash flow separately.
+Each metric records `ready`, `blocked` or `not_applicable`, its input requirements
+and unresolved gates. Denominator source records are retained when eligible.
+
+Debt/equity-component requirements and annual/TTM denominator checks run even
+when market cap is unavailable. A missing numerator therefore no longer hides
+an earnings-scope issue, absent cash-flow denominator, balance-date mismatch or
+missing preferred/minority-interest input. Generic EV and FCF multiples remain
+not applicable for banks. Missing components are never interpreted as zero.
+
+The September 16 cached FTNT case retains its reviewed share count and an
+eligible revenue denominator, but cannot yet produce a verified valuation.
+Remaining requirements include reviewed price, class/ADR/split coverage, complete
+debt, preferred and minority-interest amounts, common-shareholder earnings and
+an eligible annual/TTM FCF denominator. The preserved-source audit is available
+locally at `.tradingagents/validation/full-valuation/FTNT/valuation-audit.md`.
+This is a historical evidence audit, not a current quote refresh.

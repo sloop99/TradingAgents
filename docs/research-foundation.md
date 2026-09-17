@@ -355,3 +355,13 @@ Six cached packets produced review drafts; CRWD had one eligible dated market
 split candidate, and the other five had none in retained evidence. All pending
 drafts refused execution. Regression: 817 passed, 2 optional skips and 70 subtests
 passed; Ruff passed.
+
+### Complete valuation-readiness audit
+
+Every valuation metric now exposes its complete input checklist before its
+numerator becomes available. This makes downstream accounting and denominator
+gaps visible alongside capitalization gaps. Six preserved company packets were
+replayed; FTNT's earlier share review remains valid. No real-company verified
+valuation was unlocked. Detailed per-company audits are under
+`.tradingagents/validation/full-valuation/`.
+Regression: 820 passed, 2 optional skips and 70 subtests passed; Ruff passed.

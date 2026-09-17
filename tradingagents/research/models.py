@@ -515,6 +515,14 @@ class ResearchPacket:
                           "Withheld metrics: " + (", ".join(capitalization.get("missing_metrics", [])) or "none") + ".", ""])
             for requirement, satisfied in capitalization.get("market_cap_prerequisites", {}).items():
                 lines.append(f"- {requirement}: {'supported' if satisfied else 'unresolved'}")
+            audits = capitalization.get("valuation_readiness", {})
+            if audits:
+                lines.extend(["", "### Readiness by valuation metric", "",
+                              "| Metric | Status | Remaining requirements |",
+                              "|---|---|---|"])
+                for metric, audit in audits.items():
+                    missing = ", ".join(audit.get("unresolved", [])) or "none"
+                    lines.append(f"| {metric} | {audit['status']} | {missing} |")
             plan = capitalization.get("market_cap_evidence_plan", {})
             interval = plan.get("split_interval")
             if interval:

@@ -74,6 +74,38 @@ def test_closed_numeric_example_has_full_lineage_and_multiples():
         "price", derived(result, "current_shares_split_adjusted").fact_id, "classes", "adr"
     )
     assert result.summary["status"] == "sufficient"
+    assert all(audit["status"] == "ready" for audit in result.summary["valuation_readiness"].values())
+
+
+def test_full_readiness_checks_downstream_inputs_even_without_market_cap():
+    inputs = [f for f in closed_inputs() if f.metric not in {
+        "current_share_price", "preferred_stock", "noncontrolling_interest",
+        "net_income_attributable_to_common_ttm", "free_cash_flow_ttm"}]
+    result = analyze_capitalization(inputs, BusinessModel.GENERAL, "2026-04-01")
+    audit = result.summary["valuation_readiness"]
+    assert audit["net_debt"]["status"] == "ready"
+    assert "explicit_preferred_equity" in audit["enterprise_value"]["unresolved"]
+    assert "explicit_noncontrolling_interest" in audit["enterprise_value"]["unresolved"]
+    assert "eligible_annual_or_ttm_denominator" in audit["price_to_earnings"]["unresolved"]
+    assert "eligible_annual_or_ttm_denominator" in audit["price_to_free_cash_flow"]["unresolved"]
+    assert audit["enterprise_value_to_revenue"]["denominator"]["fact_id"] == "revenue"
+    assert derived(result, "market_cap") is None
+
+
+def test_bank_audit_marks_generic_ev_and_fcf_multiples_not_applicable():
+    result = analyze_capitalization(closed_inputs(), BusinessModel.BANK, "2026-04-01")
+    audit = result.summary["valuation_readiness"]
+    for metric in ("enterprise_value", "enterprise_value_to_revenue", "price_to_free_cash_flow"):
+        assert audit[metric]["status"] == "not_applicable"
+        assert audit[metric]["unresolved"] == []
+
+
+def test_downstream_date_mismatch_is_visible_before_market_cap_is_available():
+    inputs = [f for f in closed_inputs() if f.metric not in {"current_share_price", "cash"}]
+    inputs.append(fact("cash-other-date", "cash", 300, "2026-03-30"))
+    result = analyze_capitalization(inputs, BusinessModel.GENERAL, "2026-04-01")
+    assert "matching_balance_dates" in result.summary["valuation_readiness"]["enterprise_value"]["unresolved"]
+    assert any(i.code == "BALANCE_DATE_MISMATCH" and i.metric == "enterprise_value" for i in result.issues)
 
 
 @pytest.mark.unit

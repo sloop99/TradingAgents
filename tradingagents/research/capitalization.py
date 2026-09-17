@@ -228,7 +228,13 @@ def analyze_capitalization(
                 nci = None
 
     net_debt: EvidenceFact | None = None
-    if debt and cash and _same_balance_date([debt, cash], issues, "net_debt") and _same_currency([debt, cash], issues, "net_debt"):
+    net_requirements = {
+        "complete_current_debt": debt is not None,
+        "current_cash": cash is not None,
+        "matching_balance_dates": bool(debt and cash) and _same_balance_date([debt, cash], issues, "net_debt"),
+        "matching_currency": bool(debt and cash) and _same_currency([debt, cash], issues, "net_debt"),
+    }
+    if all(net_requirements.values()):
         net_debt = _calculated(
             "net_debt", float(debt.value) - float(cash.value), _money_currency(debt.unit) or "", None,
             max(debt.period_end, cash.period_end), [debt, cash],
@@ -238,9 +244,25 @@ def analyze_capitalization(
         derived.append(net_debt)
 
     enterprise_value: EvidenceFact | None = None
+    ev_balance = [debt, preferred, nci, cash]
+    ev_inputs = [market_cap] + ev_balance
+    ev_requirements = {
+        "verified_market_cap": market_cap is not None,
+        "complete_current_debt": debt is not None,
+        "current_cash": cash is not None,
+        "explicit_preferred_equity": preferred is not None,
+        "explicit_noncontrolling_interest": nci is not None,
+        "matching_balance_dates": business_model is not BusinessModel.BANK and all(ev_balance) and _same_balance_date(ev_balance, issues, "enterprise_value"),
+        "matching_currency": business_model is not BusinessModel.BANK and all(ev_inputs) and _same_currency(ev_inputs, issues, "enterprise_value"),
+    }
+    valuation_readiness = {
+        "market_cap": _metric_readiness(cap_prerequisites),
+        "net_debt": _metric_readiness(net_requirements),
+        "enterprise_value": _metric_readiness(ev_requirements, business_model is not BusinessModel.BANK),
+    }
     if business_model is BusinessModel.BANK:
         issues.append(_issue("BANK_EV_UNSUPPORTED", "Generic enterprise value and free-cash-flow multiples are not applied to banks.", IssueSeverity.INFO, "enterprise_value"))
-    elif market_cap is not None:
+    else:
         for fact, metric, requirement in (
             (debt, "enterprise_value", "complete total_debt"),
             (cash, "enterprise_value", "cash"),
@@ -249,8 +271,7 @@ def analyze_capitalization(
         ):
             if fact is None:
                 _missing(issues, metric, requirement)
-        ev_inputs = [market_cap, debt, preferred, nci, cash]
-        if all(ev_inputs) and _same_balance_date([debt, preferred, nci, cash], issues, "enterprise_value") and _same_currency(ev_inputs, issues, "enterprise_value"):  # type: ignore[arg-type]
+        if all(ev_requirements.values()):
             enterprise_value = _calculated(
                 "enterprise_value",
                 float(market_cap.value) + float(debt.value) + float(preferred.value) + float(nci.value) - float(cash.value),  # type: ignore[union-attr]
@@ -272,16 +293,25 @@ def analyze_capitalization(
             ("price_to_free_cash_flow", market_cap, ("free_cash_flow_ttm", "free_cash_flow")),
         ])
     for output_metric, numerator, denominator_metrics in multiple_specs:
-        if numerator is None:
-            continue
         denominator, conflict = _select_denominator(eligible, denominator_metrics, output_metric, cutoff.date(), issues)
         conflicts |= conflict
+        requirements = {
+            "verified_numerator": numerator is not None,
+            "eligible_annual_or_ttm_denominator": denominator is not None,
+            "positive_denominator": denominator is not None and float(denominator.value) > 0,
+            "denominator_currency_identified": denominator is not None and _money_currency(denominator.unit) is not None,
+            "matching_currency": bool(numerator and denominator) and _same_currency([numerator, denominator], issues, output_metric),
+        }
+        valuation_readiness[output_metric] = {
+            **_metric_readiness(requirements),
+            "denominator": _summary_fact(denominator) if denominator else None,
+        }
         if denominator is None:
             continue
         if float(denominator.value) <= 0:
             issues.append(_issue("NONPOSITIVE_MULTIPLE_DENOMINATOR", f"{output_metric} was withheld because {denominator.metric} is nonpositive.", IssueSeverity.INFO, output_metric))
             continue
-        if not _same_currency([numerator, denominator], issues, output_metric):
+        if not all(requirements.values()):
             continue
         derived.append(_calculated(
             output_metric, float(numerator.value) / float(denominator.value), "x",
@@ -289,6 +319,9 @@ def analyze_capitalization(
             f"{output_metric.replace('_', ' ')} using a verified capitalization numerator.",
             "not applicable", f"{numerator.metric} / {denominator.metric}",
         ))
+    if business_model is BusinessModel.BANK:
+        for metric in ("enterprise_value_to_revenue", "price_to_free_cash_flow"):
+            valuation_readiness[metric] = _metric_readiness({}, False)
 
     intended = {"market_cap", "price_to_earnings"}
     if business_model is not BusinessModel.BANK:
@@ -314,6 +347,7 @@ def analyze_capitalization(
             _summary_fact(f) for f in eligible if _metric(f) in _NCI_CANDIDATE_METRICS
         ],
         "market_cap_prerequisites": cap_prerequisites,
+        "valuation_readiness": valuation_readiness,
         "market_cap_evidence_plan": _evidence_plan(cap_prerequisites, price, shares, eligible),
         "missing_metrics": sorted(intended - produced),
         "assumptions": {
@@ -329,6 +363,14 @@ def analyze_capitalization(
         },
     }
     return CapitalizationResult(sorted(derived, key=_fact_sort_key), _dedupe_issues(issues), summary)
+
+
+def _metric_readiness(requirements: dict[str, bool], applicable: bool = True) -> dict[str, Any]:
+    return {
+        "status": ("ready" if all(requirements.values()) else "blocked") if applicable else "not_applicable",
+        "requirements": requirements if applicable else {},
+        "unresolved": [key for key, value in requirements.items() if not value] if applicable else [],
+    }
 
 
 def _select_role(facts: list[EvidenceFact], metrics: set[str], label: str, issues: list[ResearchIssue]) -> tuple[EvidenceFact | None, bool]:
