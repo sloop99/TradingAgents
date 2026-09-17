@@ -24,6 +24,8 @@ from .models import EvidenceFact
 _MAX_SOURCE_BYTES = 16 * 1024 * 1024
 _MAX_ELEMENTS = 250_000
 _MAX_CANDIDATES = 5_000
+_MAX_LISTING_CANDIDATES = 1_000
+_MAX_LISTING_TEXT = 500
 _MAX_SCALE = 18
 _SNIPPET_LIMIT = 600
 
@@ -161,6 +163,12 @@ _CUSTOM_MARKERS = (
     "incomeattributabletocommon",
 )
 
+_LISTING_CONCEPTS = {
+    "Security12bTitle": "security_title",
+    "TradingSymbol": "trading_symbol",
+    "SecurityExchangeName": "exchange_name",
+}
+
 
 def extract_filing_evidence(
     html: str,
@@ -196,6 +204,7 @@ def extract_filing_evidence(
         "source_bytes": len(source_bytes),
         "element_count": 0,
         "candidates": [],
+        "listing_candidates": [],
         "contexts": {},
     }
     result: dict[str, Any] = {
@@ -291,6 +300,16 @@ def extract_filing_evidence(
         document["period_end"] = period_ends[-1]
     result["documents"].append(document)
     result["coverage"]["documents"] = "partial"
+
+    _extract_listing_candidates(
+        elements=elements,
+        contexts=contexts,
+        namespace_uris=namespace_uris,
+        source_url=str(source_url).strip(),
+        source_sha256=source_hash,
+        output=metadata["listing_candidates"],
+        issue=issue,
+    )
 
     candidate_count = 0
     used_node_ids: set[str] = set()
@@ -453,6 +472,198 @@ def extract_filing_evidence(
     return result
 
 
+def _extract_listing_candidates(
+    *,
+    elements: list[etree._Element],
+    contexts: dict[str, dict[str, Any]],
+    namespace_uris: dict[str, str],
+    source_url: str,
+    source_sha256: str,
+    output: list[dict[str, Any]],
+    issue: Any,
+) -> None:
+    """Surface bounded, context-paired DEI listing text for later review."""
+
+    listing_nodes: list[tuple[etree._Element, str, str]] = []
+    id_counts: dict[str, int] = {}
+    for element in elements:
+        node_id = _attribute(element, "id")
+        if node_id:
+            id_counts[node_id] = id_counts.get(node_id, 0) + 1
+    for element in elements:
+        if not _is_inline_element(element, "nonnumeric", namespace_uris):
+            continue
+        concept = _attribute(element, "name")
+        field = _listing_field(concept, element, namespace_uris)
+        if field is None:
+            continue
+        listing_nodes.append((element, concept, field))
+
+    used_node_ids: set[str] = set()
+    for element, concept, field in listing_nodes[:_MAX_LISTING_CANDIDATES]:
+        context_ref = _attribute(element, "contextref")
+        path = element.getroottree().getpath(element)
+        source_node_id, source_locator, anchored_url = _source_locator(
+            element, source_url, path, used_node_ids
+        )
+        candidate: dict[str, Any] = {
+            "status": "rejected",
+            "concept": concept,
+            "field": field,
+            "context_id": context_ref,
+            "source_node_id": source_node_id,
+            "source_locator": source_locator,
+            "source_url": anchored_url,
+            "source_sha256": source_sha256,
+            "snippet": _listing_snippet(element),
+        }
+        output.append(candidate)
+
+        supplied_id = _attribute(element, "id")
+        if supplied_id and id_counts.get(supplied_id, 0) != 1:
+            candidate.update(
+                {
+                    "reason": "duplicate_node_id",
+                    "source_node_id": None,
+                    "source_locator": f"xpath:{path}",
+                    "source_url": source_url,
+                }
+            )
+            issue(
+                "filing_listing_duplicate_node_id",
+                "Listing text with an ambiguous source node ID was excluded.",
+                "error",
+            )
+            continue
+        if _is_nil(element):
+            candidate["reason"] = "nil"
+            issue("filing_listing_nil", "Nil listing-text candidates were excluded.")
+            continue
+        if _attribute(element, "continuedat"):
+            candidate["reason"] = "continuation_unsupported"
+            issue(
+                "filing_listing_continuation_unsupported",
+                "Continued listing text was excluded rather than partially resolved.",
+            )
+            continue
+        format_name = _attribute(element, "format")
+        display_text_format = False
+        if format_name:
+            display_text_format = _is_sec_exchange_display_format(
+                format_name, field, element, namespace_uris
+            )
+            if not display_text_format:
+                candidate["reason"] = "transform_unsupported"
+                issue(
+                    "filing_listing_transform_unsupported",
+                    "Unsupported or untrusted transformed listing text was excluded.",
+                )
+                continue
+        context = contexts.get(context_ref)
+        if context is None:
+            candidate["reason"] = "missing_context"
+            issue(
+                "filing_listing_context_missing",
+                f"Listing text references missing context {context_ref!r}.",
+                "error",
+            )
+            continue
+        if not context.get("safe"):
+            candidate["reason"] = str(context.get("reason") or "unsafe_context")
+            issue(
+                "filing_listing_context_unsafe",
+                "Listing text with an unsafe context was excluded.",
+                "error",
+            )
+            continue
+        raw_text = _visible_numeric_text(element)
+        value = " ".join(raw_text.split())
+        if not value:
+            candidate["reason"] = "empty_text"
+            issue("filing_listing_text_invalid", "Empty listing text was excluded.")
+            continue
+        if len(value) > _MAX_LISTING_TEXT:
+            candidate["reason"] = "text_too_long"
+            issue(
+                "filing_listing_text_limit",
+                f"Listing text longer than {_MAX_LISTING_TEXT} characters was excluded.",
+                "error",
+            )
+            continue
+        candidate.update(
+            {
+                "status": "accepted",
+                "value": value,
+                "period_start": context.get("period_start"),
+                "period_end": context["period_end"],
+                "period_type": context["period_type"],
+                "dimensions": context["dimensions"],
+                "context_signature": context["signature"],
+            }
+        )
+        if display_text_format:
+            candidate.update(
+                {
+                    "value_kind": "display_text",
+                    "format": format_name,
+                    "transformed_value": None,
+                }
+            )
+
+    if len(listing_nodes) > _MAX_LISTING_CANDIDATES:
+        issue(
+            "filing_listing_candidate_limit",
+            f"More than {_MAX_LISTING_CANDIDATES} listing-text candidates were present; the remainder were excluded.",
+            "error",
+        )
+
+
+def _listing_field(
+    concept: str, element: etree._Element, namespace_uris: dict[str, str]
+) -> str | None:
+    if not concept or not _qname_resolves(concept, element, namespace_uris):
+        return None
+    prefix, local = concept.split(":", 1)
+    if local not in _LISTING_CONCEPTS:
+        return None
+    uri = (element.nsmap or {}).get(prefix) or namespace_uris.get(prefix, "")
+    if not uri.startswith("http://xbrl.sec.gov/dei/"):
+        return None
+    return _LISTING_CONCEPTS[local]
+
+
+def _is_sec_exchange_display_format(
+    format_name: str,
+    field: str,
+    element: etree._Element,
+    namespace_uris: dict[str, str],
+) -> bool:
+    if field != "exchange_name" or not _qname_resolves(
+        format_name, element, namespace_uris
+    ):
+        return False
+    prefix, local = format_name.split(":", 1)
+    uri = (element.nsmap or {}).get(prefix) or namespace_uris.get(prefix, "")
+    return (
+        re.fullmatch(
+            r"http://www\.sec\.gov/inlineXBRL/transformation/\d{4}-\d{2}-\d{2}", uri
+        )
+        is not None
+        and local.casefold() == "exchnameen"
+    )
+
+
+def _listing_snippet(element: etree._Element) -> str:
+    attributes = []
+    for name in ("id", "name", "contextref", "format", "continuedat"):
+        value = _attribute(element, name)
+        if value:
+            attributes.append(f'{name}="{value}"')
+    text = " ".join(_visible_numeric_text(element).split())
+    compact = f"<ix:nonNumeric {' '.join(attributes)}>{text}</ix:nonNumeric>"
+    return compact[:_SNIPPET_LIMIT]
+
+
 def _parse_document(source: bytes) -> tuple[etree._Element | None, str | None]:
     try:
         parser = etree.XMLParser(
@@ -532,7 +743,9 @@ def _read_contexts(
 ) -> dict[str, dict[str, Any]]:
     contexts: dict[str, dict[str, Any]] = {}
     for element in elements:
-        if _local_name(element.tag) != "context":
+        if not _is_taxonomy_element(
+            element, "context", "http://www.xbrl.org/2003/instance", namespace_uris
+        ):
             continue
         context_id = _attribute(element, "id")
         if not context_id:
@@ -558,7 +771,9 @@ def _read_contexts(
             "reason": None,
         }
         identifiers = _descendants(element, "identifier")
-        if len(identifiers) != 1:
+        if len(identifiers) != 1 or not _is_taxonomy_element(
+            identifiers[0], "identifier", "http://www.xbrl.org/2003/instance", namespace_uris
+        ):
             record["reason"] = "missing_or_ambiguous_identifier"
             contexts[context_id] = record
             continue
@@ -573,8 +788,21 @@ def _read_contexts(
             record["reason"] = "cik_mismatch"
             contexts[context_id] = record
             continue
-        if _descendants(element, "typedmember"):
-            record["reason"] = "typed_member"
+        typed_members = _descendants(element, "typedmember")
+        if typed_members:
+            record["reason"] = (
+                "typed_member"
+                if all(
+                    _is_taxonomy_element(
+                        member,
+                        "typedmember",
+                        "http://xbrl.org/2006/xbrldi",
+                        namespace_uris,
+                    )
+                    for member in typed_members
+                )
+                else "untrusted_context_namespace"
+            )
             contexts[context_id] = record
             continue
         dimensions: dict[str, str] = {}
@@ -583,7 +811,10 @@ def _read_contexts(
             dimension = _attribute(member, "dimension")
             member_name = _node_text(member)
             if (
-                not dimension
+                not _is_taxonomy_element(
+                    member, "explicitmember", "http://xbrl.org/2006/xbrldi", namespace_uris
+                )
+                or not dimension
                 or not member_name
                 or not _qname_resolves(dimension, member, namespace_uris)
                 or not _qname_resolves(member_name, member, namespace_uris)
@@ -599,6 +830,16 @@ def _read_contexts(
         instants = _descendants(element, "instant")
         starts = _descendants(element, "startdate")
         ends = _descendants(element, "enddate")
+        period_nodes = [*instants, *starts, *ends]
+        if any(
+            not _is_taxonomy_element(
+                node, _local_name(node.tag), "http://www.xbrl.org/2003/instance", namespace_uris
+            )
+            for node in period_nodes
+        ):
+            record["reason"] = "untrusted_context_namespace"
+            contexts[context_id] = record
+            continue
         if len(instants) == 1 and not starts and not ends:
             period_end = _iso_date(_node_text(instants[0]))
             period_start = None
@@ -638,6 +879,24 @@ def _read_contexts(
         record["signature"] = hashlib.sha256(signature.encode("utf-8")).hexdigest()
         contexts[context_id] = record
     return contexts
+
+
+def _is_taxonomy_element(
+    element: etree._Element,
+    local_name: str,
+    namespace_uri: str,
+    namespace_uris: dict[str, str],
+) -> bool:
+    tag = element.tag
+    if not isinstance(tag, str) or _local_name(tag) != local_name.casefold():
+        return False
+    if tag.startswith("{"):
+        return tag[1:].split("}", 1)[0] == namespace_uri
+    if ":" not in tag:
+        return False
+    prefix = tag.split(":", 1)[0]
+    uri = (element.nsmap or {}).get(prefix) or namespace_uris.get(prefix, "")
+    return uri == namespace_uri
 
 
 def _iso_date(value: str) -> str | None:

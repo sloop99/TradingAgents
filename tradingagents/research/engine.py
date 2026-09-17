@@ -10,6 +10,7 @@ from .capitalization import analyze_capitalization
 from .checks import classify_business, run_checks
 from .filing_reconciliation import analyze_filing_contexts
 from .financials import analyze_financials
+from .listing_review import summarize_listing_evidence
 from .models import (
     CoverageStatus,
     EvidenceDocument,
@@ -302,6 +303,9 @@ def build_packet(
             "summary": financials.summary,
             "capitalization": capitalization.summary,
             "filing_reconciliation": filing_review.summary,
+            "listing_evidence": summarize_listing_evidence(
+                filing_metadata, documents, normalized_ticker,
+                identity.cik if identity else None, normalized_as_of),
             "reviewed_inputs": reviewed.summary,
         },
     )

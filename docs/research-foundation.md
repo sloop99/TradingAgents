@@ -301,3 +301,18 @@ Six cached packets passed replay and roundtrip checks, with 30 eligible price
 candidates each and no automatic price promotion. A synthetic complete-proof
 pipeline calculates market cap from reviewed price and shares. Regression:
 775 passed, 2 optional skips and 70 subtests passed; Ruff passed.
+
+### Listed-security evidence (2026-09-16)
+
+The [listing evidence pass](listing-evidence.md) adds cover-page security titles,
+symbols and exchange display text with source locations and context binding.
+Text is grouped within a filing context; multiple listed instruments are not
+treated as common-equity classes. Safe parsing and retained-document/cutoff
+checks preserve rejected cases as diagnostics. No capitalization proof ratios
+are generated from listing text.
+
+Six cached filings yielded 72 accepted text observations in 24 context groups,
+while all 388 existing numeric facts were reproduced exactly. This supplies
+reviewable listing evidence for generic stock inputs; equity-note class coverage
+and complete split-history evidence still need separate reconciliation.
+Regression: 792 passed, 2 optional skips and 70 subtests passed; Ruff passed.

@@ -437,6 +437,9 @@ class ResearchPacket:
             missing = ", ".join(capitalization.get("missing_metrics", [])) or "none"
             lines.append(f"Capitalization status: {capitalization.get('status', 'unsupported')}; withheld metrics: {missing}. Vendor market cap is not independently verified.")
         lines.extend(["", "## Eligible facts"])
+        listing_groups = self.financial_analysis.get("listing_evidence", {}).get("groups", [])
+        if listing_groups:
+            lines.append(f"Listed-security evidence: {len(listing_groups)} filing context groups retained; these do not establish all-class coverage, ADR conversion or split completeness.")
         for fact in selected:
             period = fact.period_end
             if fact.period_start:
@@ -524,6 +527,19 @@ class ResearchPacket:
                           f"Review status: **{reviewed['status']}**.",
                           "Promotions preserve the source quantities and record an analyst's interpretation of their scope. Evidence checks do not independently prove that interpretation.",
                           "Share-class coverage, ADR conversion and split completeness remain separate requirements."])
+        listing = self.financial_analysis.get("listing_evidence", {})
+        if listing.get("groups"):
+            lines.extend(["", "## Listed-security evidence", "",
+                          "Cover-page listings identify registered securities, not every common share class. Filing context dates are not quote dates or share-count dates.", ""])
+            lines.extend(["Values below are displayed filing text; exchange transformation codes are not interpreted as canonical exchange identifiers.", ""])
+            for group in listing["groups"]:
+                lines.append(f"- Filing {group['accession']}; context ends {group['period_end']} ({group['period_type']}).")
+                for field, records in group["fields"].items():
+                    for record in records:
+                        lines.append(f"  - {field}: {record['value']} — {record['source_url']}")
+                if group["ambiguous_fields"]:
+                    lines.append("  - Multiple values require review; no unique security mapping is inferred.")
+            lines.extend(["", "Class completeness, ADR conversion and complete split coverage remain unestablished by these listings."])
         filing_candidates = [fact for fact in self.facts
                              if fact.kind is FactKind.REPORTED and fact.metric.startswith("filing_")]
         if filing_candidates:
