@@ -530,6 +530,12 @@ class ResearchPacket:
                           f"Review status: **{reviewed['status']}**.",
                           "Promotions preserve the source quantities and record an analyst's interpretation of their scope. Evidence checks do not independently prove that interpretation.",
                           "Share-class coverage, ADR conversion and split completeness remain separate requirements."])
+            split_rules = [rule for rule in reviewed.get("rule_decisions", [])
+                           if rule.get("output_metric") == "split_ratio" and rule.get("status") == "applied"]
+            if split_rules:
+                lines.extend(["", "Reviewed split events (first split-adjusted trading dates; complete history is not established):", ""])
+                for rule in split_rules:
+                    lines.append(f"- {rule['effective_date']}: {rule['effective_date_source_url']} (fact {rule['derived_fact_id']})")
         listing = self.financial_analysis.get("listing_evidence", {})
         if listing.get("groups"):
             lines.extend(["", "## Listed-security evidence", "",

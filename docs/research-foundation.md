@@ -336,3 +336,22 @@ The [analyst expectations roadmap](analyst-expectations-roadmap.md) records the
 requested named-firm average, median, range and coverage count, separately from
 vendor consensus. Analyst data collection is not implemented in this phase.
 Regression: 805 passed, 2 optional skips and 70 subtests passed; Ruff passed.
+
+### Reviewed split-event dates
+
+Evidence-bound review manifests now support multiple dated split events. A
+reviewer must identify the first split-adjusted trading date, cite its source,
+confirm the unchanged ratio's direction and its applicability to counted shares.
+Announcement dates, record dates and filing periods are not inferred as event
+dates. Existing dated market events cannot be moved, and competing rules for the
+same date are rejected.
+
+The calculator can consume these events while continuing to require independent
+complete interval coverage. A controlled test verifies 100 shares through a
+four-for-one split at a USD 10 quote yields USD 4,000 market cap only when class,
+ADR and complete split-history evidence are also supplied. Real-company split
+history completeness is not established by this change.
+Six cached packets produced review drafts; CRWD had one eligible dated market
+split candidate, and the other five had none in retained evidence. All pending
+drafts refused execution. Regression: 817 passed, 2 optional skips and 70 subtests
+passed; Ruff passed.

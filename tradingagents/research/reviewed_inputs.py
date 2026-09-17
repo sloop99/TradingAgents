@@ -14,11 +14,17 @@ from datetime import date, datetime, time, timezone
 from decimal import Decimal
 from hashlib import sha256
 from typing import Any
+from urllib.parse import urldefrag
 
 from .models import EvidenceFact, IssueSeverity, ResearchIssue
 
 _SCHEMA_VERSION = 1
-_OUTPUTS = {"current_share_price", "current_shares", "total_debt"}
+_OUTPUTS = {"current_share_price", "current_shares", "total_debt", "split_ratio"}
+_SPLIT_ATTESTATIONS = {
+    "effective_date_confirmed", "new_shares_per_old_share",
+    "applies_to_all_counted_common_shares",
+}
+_SPLIT_CONCEPTS = {"us-gaap:StockSplitConversionRatio", "us-gaap:StockSplitConversionRatio1"}
 _SHARE_ATTESTATIONS = {"point_in_time_common_shares", "raw_as_reported_basis"}
 _PRICE_ATTESTATIONS = {
     "listing_currency",
@@ -117,7 +123,7 @@ def apply_reviewed_inputs(
         for rule in rules if isinstance(rule, dict)
     )
     output_counts = Counter(
-        str(rule.get("output_metric") or "").strip()
+        _output_slot(rule)
         for rule in rules if isinstance(rule, dict)
     )
     derived: list[EvidenceFact] = []
@@ -126,6 +132,7 @@ def apply_reviewed_inputs(
     for raw_rule in rules:
         rule_id = str(raw_rule.get("rule_id") or "").strip() if isinstance(raw_rule, dict) else ""
         output = str(raw_rule.get("output_metric") or "").strip() if isinstance(raw_rule, dict) else ""
+        slot = _output_slot(raw_rule) if isinstance(raw_rule, dict) else ""
         inputs = [str(value).strip() for value in raw_rule.get("input_fact_ids", [])] if isinstance(raw_rule, dict) and isinstance(raw_rule.get("input_fact_ids"), list) else []
         operation = str(raw_rule.get("operation") or "").strip() if isinstance(raw_rule, dict) else ""
         rationale = str(raw_rule.get("rationale") or "").strip() if isinstance(raw_rule, dict) else ""
@@ -137,9 +144,9 @@ def apply_reviewed_inputs(
         reasons = _validate_rule(raw_rule, output, inputs, by_id, reviewed_at)
         if rule_id and rule_id_counts[rule_id] > 1:
             reasons.append("duplicate rule_id makes every matching rule ambiguous")
-        if output and output_counts[output] > 1:
+        if output and output_counts[slot] > 1:
             reasons.append("duplicate output_metric makes every matching rule ambiguous")
-        if output in seen_outputs:
+        if slot in seen_outputs:
             reasons.append("output_metric was already applied")
         if set(inputs) & reused_ids:
             reasons.append("an input fact is reused across review rules")
@@ -166,7 +173,7 @@ def apply_reviewed_inputs(
         selected = [by_id[fact_id] for fact_id in inputs]
         promoted = _promote(raw_rule, selected, reviewer, base_hash)
         derived.append(promoted)
-        seen_outputs.add(output)
+        seen_outputs.add(slot)
         decisions.append({
             "rule_id": rule_id,
             "output_metric": output,
@@ -176,6 +183,8 @@ def apply_reviewed_inputs(
             "attestations": attestations,
             "rationale": rationale,
             "derived_fact_id": promoted.fact_id,
+            "effective_date": raw_rule.get("effective_date") if output == "split_ratio" else None,
+            "effective_date_source_url": raw_rule.get("effective_date_source_url") if output == "split_ratio" else None,
         })
 
     applied = sum(decision["status"] == "applied" for decision in decisions)
@@ -221,11 +230,13 @@ def draft_review_manifest(
             "current_share_price": [_candidate_summary(fact) for fact in price_candidates],
             "current_shares": [_candidate_summary(fact) for fact in share_candidates],
             "total_debt": [_candidate_summary(fact) for fact in debt_candidates],
+            "split_ratio": [_candidate_summary(fact) for fact in reported if _split_source_allowed(fact)],
         },
         "required_attestations": {
             "current_share_price": sorted(_PRICE_ATTESTATIONS),
             "current_shares": sorted(_SHARE_ATTESTATIONS),
             "total_debt": sorted(_DEBT_ATTESTATIONS),
+            "split_ratio": sorted(_SPLIT_ATTESTATIONS),
             "sum_operation_additional": [_DISJOINT],
         },
         "unresolved_gaps": [
@@ -233,6 +244,7 @@ def draft_review_manifest(
             "Current-price promotion records an analyst-reviewed quote-date split basis; it does not establish class, ADR, or complete split-history proofs.",
             "Current-share promotion does not prove all-class coverage, ADR conversion, or split history.",
             "Missing debt or share quantities are never filled with zero.",
+            "Split review requires effective_date, effective_date_source_url and date_basis=first_split_adjusted_trading_date; individual events do not prove complete history.",
         ],
     }
 
@@ -336,6 +348,7 @@ def _validate_rule(
         "current_share_price": _PRICE_ATTESTATIONS,
         "current_shares": _SHARE_ATTESTATIONS,
         "total_debt": _DEBT_ATTESTATIONS,
+        "split_ratio": _SPLIT_ATTESTATIONS,
     }.get(output, set())
     if not required <= attestations:
         reasons.append(f"missing attestations: {', '.join(sorted(required - attestations))}")
@@ -346,7 +359,28 @@ def _validate_rule(
         for fact in selected
     ):
         reasons.append("review predates an input's evidence availability")
-    if output == "current_share_price":
+    if output == "split_ratio":
+        if rule.get("date_basis") != "first_split_adjusted_trading_date":
+            reasons.append("split date_basis must identify the first split-adjusted trading date, not the announcement or record date")
+        if operation != "copy" or any(not _split_source_allowed(fact) for fact in selected):
+            reasons.append("split_ratio requires a copy of one positive reported split ratio")
+        effective_text = rule.get("effective_date")
+        try:
+            if not isinstance(effective_text, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}", effective_text):
+                raise ValueError("date required")
+            effective = date.fromisoformat(effective_text)
+            if effective > review_time.date():
+                reasons.append("split effective date is after the review date")
+            if any(f.metric == "split_ratio" and f.period_end != effective_text for f in selected):
+                reasons.append("an already dated split event cannot be moved to a different date")
+        except (TypeError, ValueError):
+            reasons.append("effective_date must be an explicit ISO calendar date")
+        citation = rule.get("effective_date_source_url")
+        if not isinstance(citation, str) or not citation or any(
+            urldefrag(citation)[0] != urldefrag(f.source_url)[0] for f in selected
+        ):
+            reasons.append("effective date citation must reference the retained ratio's source document")
+    elif output == "current_share_price":
         if operation != "copy":
             reasons.append("current_share_price initially supports copy only")
         if any(not _price_source_allowed(fact) for fact in selected):
@@ -376,8 +410,8 @@ def _promote(
     reviewer: dict[str, Any],
     base_hash: str,
 ) -> EvidenceFact:
-    output = str(rule["output_metric"])
-    operation = str(rule["operation"])
+    output = str(rule["output_metric"]).strip()
+    operation = str(rule["operation"]).strip()
     if operation == "copy":
         value = inputs[0].value
     elif all(isinstance(fact.value, int) and not isinstance(fact.value, bool) for fact in inputs):
@@ -392,9 +426,9 @@ def _promote(
         "fact_id": f"calc:reviewed-input:{output}:{inputs[0].period_end}:{digest}",
         "metric": output,
         "value": value,
-        "unit": inputs[0].unit,
-        "period_start": inputs[0].period_start,
-        "period_end": inputs[0].period_end,
+        "unit": "ratio" if output == "split_ratio" else inputs[0].unit,
+        "period_start": None if output == "split_ratio" else inputs[0].period_start,
+        "period_end": str(rule["effective_date"]) if output == "split_ratio" else inputs[0].period_end,
         "published_at": reviewed_at,
         "retrieved_at": reviewed_at,
         "source_url": source.source_url,
@@ -420,6 +454,19 @@ def _share_source_allowed(fact: EvidenceFact) -> bool:
         and fact.period_start is None
         and "weighted_average" not in fact.metric.casefold()
         and "WeightedAverage" not in tag
+    )
+
+
+def _output_slot(rule: dict[str, Any]) -> str:
+    metric = str(rule.get("output_metric") or "").strip()
+    return f"split_ratio:{rule.get('effective_date', '')}" if metric == "split_ratio" else metric
+
+
+def _split_source_allowed(fact: EvidenceFact) -> bool:
+    return (
+        ((fact.source_tag or "") in _SPLIT_CONCEPTS or (fact.metric == "split_ratio" and fact.period_start is None))
+        and fact.unit in {"pure", "ratio", "x", "1", "unitless"}
+        and float(fact.value) > 0
     )
 
 
@@ -498,6 +545,14 @@ def _reviewed_definition(
     rule: dict[str, Any],
     inputs: list[EvidenceFact],
 ) -> str:
+    if output == "split_ratio":
+        return (
+            f"Reviewed split-event assertion by {reviewer['name']}; unchanged ratio means new shares per old share. "
+            f"First split-adjusted trading date {rule['effective_date']}; date citation {rule['effective_date_source_url']}. "
+            f"Original source period {inputs[0].period_start or 'instant'} through {inputs[0].period_end}. "
+            "Reviewer attests applicability to all counted common shares; this does not establish complete split history. "
+            f"Rule rationale: {rule['rationale']} Review rationale: {reviewer['rationale']}"
+        )
     scope = (
         "The reviewer attests this is complete interest-bearing debt including all obligations. "
         if output == "total_debt"
@@ -548,7 +603,11 @@ def _reused_sources(
         for value in rule["input_fact_ids"]:
             fact_id = str(value).strip()
             ids.append(fact_id)
-            if fact_id in by_id:
+            if fact_id in by_id and not (
+                rule.get("output_metric") == "split_ratio"
+                and by_id[fact_id].metric == "split_ratio"
+                and not urldefrag(by_id[fact_id].source_url)[1]
+            ):
                 urls.append(by_id[fact_id].source_url)
     return (
         {value for value, count in Counter(ids).items() if count > 1},
