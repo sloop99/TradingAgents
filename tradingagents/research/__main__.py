@@ -27,6 +27,7 @@ class MemoizedProvider:
 
     def __init__(self, provider):
         self.provider = provider
+        self.name = getattr(provider, "name", provider.__class__.__name__)
         self.responses = {}
 
     def fetch(self, ticker, as_of):
@@ -48,6 +49,8 @@ def main(argv=None):
     parser.add_argument("--sec-user-agent", default=os.getenv("SEC_USER_AGENT", ""),
                         help="Identifying SEC User-Agent, normally organization/name and contact email")
     parser.add_argument("--no-market", action="store_true", help="Skip the optional Yahoo market feed")
+    parser.add_argument("--analyst-targets", action="store_true",
+                        help="Collect an optional current Yahoo aggregate analyst-target snapshot")
     parser.add_argument("--filings", action="store_true",
                         help="Extract capital-structure candidates from the latest SEC annual/quarterly filing")
     parser.add_argument("--max-filings", type=int, choices=(1, 2, 3), default=1,
@@ -100,6 +103,13 @@ def main(argv=None):
             # Keep it in the caller-selected writable cache tree as well.
             yf.set_tz_cache_location(str((args.cache_dir / "yfinance").resolve()))
             providers.append(YahooMarketProvider(cache=cache))
+        if args.analyst_targets:
+            import yfinance as yf
+
+            from .providers.analyst import YahooAnalystTargetsProvider
+
+            yf.set_tz_cache_location(str((args.cache_dir / "yfinance").resolve()))
+            providers.append(YahooAnalystTargetsProvider(cache=cache))
     try:
         packet = build_packet(ticker, args.as_of, providers, args.horizon, args.thesis,
                               review_manifest=review_manifest)

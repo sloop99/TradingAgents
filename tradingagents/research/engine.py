@@ -86,6 +86,7 @@ def build_packet(
     supplied_coverage: dict[str, list[str]] = {}
     provider_results: dict[str, str] = {}
     filing_metadata: list[dict] = []
+    analyst_snapshots: list[dict] = []
 
     for index, provider in enumerate(providers):
         provider_name = _provider_name(provider, index)
@@ -188,6 +189,17 @@ def build_packet(
                 issues.append(_invalid_record_issue(provider_name, "issue", exc))
         metadata = payload.get("metadata")
         if isinstance(metadata, Mapping):
+            if "analyst_targets" in metadata:
+                from .providers.analyst import validate_snapshot
+
+                snapshot = validate_snapshot(metadata["analyst_targets"], normalized_ticker, normalized_as_of)
+                if snapshot is not None:
+                    if snapshot not in analyst_snapshots:
+                        analyst_snapshots.append(snapshot)
+                else:
+                    issues.append(ResearchIssue(code="ANALYST_SNAPSHOT_REJECTED",
+                                                message="Analyst snapshot failed identity, date, unit or aggregate-value checks.",
+                                                severity=IssueSeverity.WARNING))
             filings = metadata.get("filings")
             if isinstance(filings, list):
                 filing_metadata.extend(item for item in filings if isinstance(item, dict))
@@ -311,6 +323,9 @@ def build_packet(
             "listing_evidence": listing_summary,
             "share_inventory": share_inventory,
             "reviewed_inputs": reviewed.summary,
+            "analyst_targets": {"status": "partial" if analyst_snapshots else "unsupported",
+                                "snapshots": analyst_snapshots,
+                                "firm_level_consensus_reconstructed": False},
         },
     )
 

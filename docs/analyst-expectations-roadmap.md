@@ -55,16 +55,19 @@ not evidence that Morgan Stanley or another requested firm was included.
 5. Evaluate paid constituent/history feeds only if their coverage and publication
    timestamps justify the cost. No paid subscription or feed is enabled by this plan.
 
-The immediate implementation priority remains share-class and corporate-action
-reconciliation, since target comparisons also require a consistent share basis.
+The optional aggregate adapter is implemented. Firm-level collection and
+aggregation remain future work. Share-class and corporate-action reconciliation
+remain necessary before computing target-implied returns.
 
 ## Source capability audit
 
-The repository already depends on yfinance, but the current research packet does
-not call its analyst-target endpoints. The library's
+The research packet can now call yfinance's analyst-target endpoint with
+`--analyst-targets`. The library's
 [analysis API](https://ranaroussi.github.io/yfinance/reference/yfinance.analysis.html)
 and [price-target API](https://ranaroussi.github.io/yfinance/reference/api/yfinance.Ticker.get_analyst_price_targets.html)
 document aggregate target and estimate capabilities. These do not establish
-complete firm-level constituents or historical publication vintages. Start by
-testing a bounded optional adapter; do not label a vendor average as our own
-named-firm consensus. This audit added a roadmap, not a live analyst-data feed.
+complete firm-level constituents or historical publication vintages. The adapter
+stores mean, median, low, high and count when supplied as vendor observations,
+with retrieval time and unknown publication time/horizon. Invalid observations
+are withheld; historical cutoffs cannot trigger a current snapshot fetch.
+See [workflow commands](research-workflows.md) for evidence-only and agent runs.

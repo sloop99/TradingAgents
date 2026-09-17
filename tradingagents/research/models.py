@@ -350,6 +350,28 @@ class ResearchPacket:
                 # Neither path permits altered values, dates, or sources.
                 if selected not in (original, normalize_concept(original)):
                     raise ValueError("Selected input view differs from its original source fact")
+        analyst_targets = packet.financial_analysis.get("analyst_targets")
+        if analyst_targets is not None:
+            if not isinstance(analyst_targets, dict):
+                raise ValueError("analyst_targets must be a mapping")
+            snapshots = analyst_targets.get("snapshots")
+            status = analyst_targets.get("status")
+            if not isinstance(snapshots, list) or status not in {"partial", "unsupported"}:
+                raise ValueError("analyst_targets requires snapshots and a valid status")
+            if analyst_targets.get("firm_level_consensus_reconstructed") is not False:
+                raise ValueError("analyst_targets must not claim reconstructed firm-level consensus")
+            from .providers.analyst import validate_snapshot
+
+            validated = [validate_snapshot(snapshot, packet.ticker, packet.as_of) for snapshot in snapshots]
+            if any(snapshot is None for snapshot in validated):
+                raise ValueError("analyst_targets contains an invalid snapshot")
+            if (status == "partial") != bool(validated):
+                raise ValueError("analyst_targets status does not match its snapshots")
+            packet.financial_analysis["analyst_targets"] = {
+                "status": status,
+                "snapshots": validated,
+                "firm_level_consensus_reconstructed": False,
+            }
         return packet
 
     def to_dict(self) -> dict[str, Any]:
@@ -423,6 +445,17 @@ class ResearchPacket:
             lines.append(f"User thesis (unverified): {self.thesis}")
         if self.financial_analysis:
             lines.append("Financial inputs reconciled by concept and period; superseded reported facts remain in the full packet. Calculations do not establish valuation readiness.")
+        analyst_targets = self.financial_analysis.get("analyst_targets", {})
+        snapshots = analyst_targets.get("snapshots", []) if isinstance(analyst_targets, dict) else []
+        if snapshots:
+            shown = snapshots[:3]
+            observations = "; ".join(
+                f"{item['ticker']} {item['currency']} mean {item['values']['mean']}, median {item['values']['median']} "
+                f"(low {item['values']['low']}, high {item['values']['high']}; count {item['analyst_count'] if item['analyst_count'] is not None else 'unknown'})"
+                for item in shown
+            )
+            suffix = f"; {len(snapshots) - len(shown)} additional aggregate snapshots retained." if len(snapshots) > len(shown) else "."
+            lines.append("Analyst targets: Yahoo aggregate vendor observations only; target horizon is unknown and no firms are inferred. " + observations + suffix)
         filing_count = sum(f.kind is FactKind.REPORTED and f.metric.startswith("filing_") for f in self.facts)
         if filing_count:
             lines.append(f"Inline filing candidates: {filing_count}; retained for context review, excluded from consolidated calculations.")
@@ -507,6 +540,19 @@ class ResearchPacket:
                 latest[fact.metric] = fact
             for metric, fact in sorted(latest.items()):
                 lines.append(f"| {metric} | {fact.value:,.4f} | {fact.unit} | {fact.period_start or 'instant'} to {fact.period_end} | {fact.fact_id} |")
+        analyst_targets = self.financial_analysis.get("analyst_targets", {})
+        snapshots = analyst_targets.get("snapshots", []) if isinstance(analyst_targets, dict) else []
+        if snapshots:
+            lines.extend(["", "## Analyst targets", "",
+                          "Yahoo Finance aggregate vendor observations only. Target horizon is unknown; no named firms are inferred, and these values are not used to calculate return or upside.", "",
+                          "| Ticker | Currency | Mean | Median | Low | High | Analyst count | Retrieved | Source |",
+                          "|---|---|---:|---:|---:|---:|---:|---|---|"])
+            for snapshot in snapshots[:10]:
+                values = snapshot["values"]
+                count = snapshot["analyst_count"] if snapshot["analyst_count"] is not None else "unknown"
+                lines.append(f"| {snapshot['ticker']} | {snapshot['currency']} | {values['mean']} | {values['median']} | {values['low']} | {values['high']} | {count} | {snapshot['retrieved_at']} | {snapshot['source_url']} |")
+            if len(snapshots) > 10:
+                lines.append(f"\nOnly 10 of {len(snapshots)} aggregate snapshots are rendered here; all remain in packet JSON.")
         capitalization = self.financial_analysis.get("capitalization", {})
         if capitalization:
             lines.extend(["", "## Capitalization readiness", "",
