@@ -44,14 +44,33 @@ and valuation coverage vary by issuer; unsupported issuers remain explicit.
 Every completed evidence run contains `research-brief.md`, `packet.json`,
 `coverage.md` and `manifest.json`. Agent runs also contain the consolidated
 report and retain the chosen provider, models and analysts in the manifest.
+Completion requires all selected analyst reports, the entire research and risk
+debate chain, the trader and portfolio reports, and the exported evidence.
+The packet's horizon is included in every agent's shared evidence context.
 An evidence-only completion is not an AI thesis evaluation. The full graph
 can use newer legacy tool data; it is not a historical backtest guarantee.
 
+## Live pilot validation — September 17, 2026
+
+FTNT completed a public-company-only live run using the existing signed-in Codex
+CLI adapter, Terra for quick analysis and Sol for deeper decisions. Fundamentals
+and news were selected; the full downstream debate/risk chain also ran. All 12
+expected Markdown reports were nonempty, and the exported packet matched the
+input. CRWD and PANW also completed fresh evidence-only runs with filings and
+aggregate analyst snapshots; those were not additional model evaluations.
+
+The pilot preserved unresolved capitalization and debt inputs and did not produce
+an intrinsic-value target. Structural completion is not analytical approval:
+individual narrative claims still lack inline source citations, and generic
+transaction labels are not personalized portfolio advice. Retained evidence
+does not automatically substantiate every generated claim. Model usage was not
+quantified, and no purchase costs or personal holdings were included in the pilot.
+
 ## Next research and build steps
 
-1. Run one current thesis through `--run-agents --analysts fundamentals,news`
-   using the configured provider, review source quality and the final report,
-   then expand to CRWD, FTNT and PANW with the same thesis and cutoff.
+1. Improve claim-level source traceability for legacy tool outputs and review
+   the distinction between evidence, opinion and scenarios before expanding
+   model runs into a three-company comparison. The first live pilot is complete.
 2. Add firm-attributed analyst targets and estimate revisions, retaining dates,
    share basis and deduplicated firm counts separately from vendor aggregates.
 3. Add explicit scenario valuation and issuer-specific operating metrics;

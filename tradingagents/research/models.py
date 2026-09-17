@@ -421,6 +421,7 @@ class ResearchPacket:
         lines = [
             f"# Evidence packet: {self.ticker}",
             f"As of: {self.as_of}",
+            f"Horizon: {self.horizon}",
             f"Evidence status: {self.status.value}",
             f"Business model: {self.business_model.value}",
             "Coverage: "

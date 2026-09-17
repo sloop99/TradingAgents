@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from tradingagents.reporting import write_report_tree
 from tradingagents.research.workflow import main, parser, run_workflow
 
 
@@ -76,11 +77,22 @@ def test_agent_run_passes_packet_and_selected_analysts_to_graph(tmp_path):
             return {"final_trade_decision": "synthetic"}, "synthetic"
 
         def save_reports(self, state, ticker, save_path=None):
-            del state, ticker
-            report = Path(save_path) / "report.md"
-            report.parent.mkdir(parents=True)
-            report.write_text("report", encoding="utf-8")
-            return report
+            del state
+            packet = json.loads(Path(captured["config"]["research_packet_path"]).read_text(encoding="utf-8"))
+            synthetic_state = {
+                "research_packet": packet,
+                "news_report": "news",
+                "fundamentals_report": "fundamentals",
+                "investment_debate_state": {
+                    "bull_history": "bull", "bear_history": "bear", "judge_decision": "manager",
+                },
+                "trader_investment_plan": "trader",
+                "risk_debate_state": {
+                    "aggressive_history": "aggressive", "conservative_history": "conservative",
+                    "neutral_history": "neutral", "judge_decision": "portfolio",
+                },
+            }
+            return write_report_tree(synthetic_state, ticker, save_path=save_path)
 
     args = parser().parse_args([
         "TEST", "--as-of", "2026-01-01", "--fixture", str(fixture), "--run-agents",
@@ -102,7 +114,48 @@ def test_agent_run_passes_packet_and_selected_analysts_to_graph(tmp_path):
     assert code == 0
     assert captured["selected_analysts"] == ("fundamentals", "news")
     assert captured["config"]["research_packet_path"] == str((run_dir / "packet.json").resolve())
-    assert (run_dir / "reports" / "report.md").read_text(encoding="utf-8") == "report"
+    assert (run_dir / "reports" / "complete_report.md").exists()
+
+
+def test_agent_run_rejects_incomplete_downstream_report_tree(tmp_path):
+    fixture = tmp_path / "fixture.json"
+    fixture.write_text(json.dumps(_identity_fixture()), encoding="utf-8")
+    prep = parser().parse_args([
+        "TEST", "--as-of", "2026-01-01", "--fixture", str(fixture),
+        "--output-dir", str(tmp_path / "prep"),
+    ])
+    _, prepared_dir = run_workflow(prep)
+
+    class IncompleteGraph:
+        def __init__(self, **kwargs):
+            self.config = kwargs["config"]
+
+        def propagate(self, ticker, as_of):
+            return {"final_trade_decision": "synthetic"}, "synthetic"
+
+        def save_reports(self, state, ticker, save_path=None):
+            del state
+            packet = json.loads(Path(self.config["research_packet_path"]).read_text(encoding="utf-8"))
+            return write_report_tree({
+                "research_packet": packet,
+                "news_report": "news",
+                "fundamentals_report": "fundamentals",
+                "investment_debate_state": {
+                    "bull_history": "bull", "bear_history": "bear", "judge_decision": "manager",
+                },
+                "trader_investment_plan": "trader",
+                "risk_debate_state": {
+                    "aggressive_history": "aggressive", "conservative_history": "conservative",
+                    "neutral_history": "neutral",
+                },
+            }, ticker, save_path=save_path)
+
+    args = parser().parse_args([
+        "TEST", "--as-of", "2026-01-01", "--packet", str(prepared_dir / "packet.json"),
+        "--run-agents", "--analysts", "fundamentals,news", "--output-dir", str(tmp_path / "runs"),
+    ])
+    with pytest.raises(ValueError, match="5_portfolio"):
+        run_workflow(args, graph_factory=IncompleteGraph)
 
 
 def test_cli_returns_error_for_fixture_agent_combination(tmp_path, capsys):

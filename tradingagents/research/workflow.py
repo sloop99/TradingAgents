@@ -110,6 +110,38 @@ def _packet_limitations(packet: ResearchPacket) -> list[str]:
     return limits
 
 
+def _validate_report_tree(reports_path: Path, analysts: tuple[str, ...]) -> None:
+    """Require every selected and downstream graph section before completion."""
+    selected_reports = {
+        "market": Path("1_analysts/market.md"),
+        "social": Path("1_analysts/sentiment.md"),
+        "news": Path("1_analysts/news.md"),
+        "fundamentals": Path("1_analysts/fundamentals.md"),
+    }
+    required = [
+        Path("0_evidence/packet.json"),
+        Path("0_evidence/coverage.md"),
+        Path("2_research/bull.md"),
+        Path("2_research/bear.md"),
+        Path("2_research/manager.md"),
+        Path("3_trading/trader.md"),
+        Path("4_risk/aggressive.md"),
+        Path("4_risk/conservative.md"),
+        Path("4_risk/neutral.md"),
+        Path("5_portfolio/decision.md"),
+        Path("complete_report.md"),
+    ]
+    required.extend(selected_reports[key] for key in analysts)
+    missing = [str(path) for path in required
+               if not (reports_path / path).is_file()
+               or (reports_path / path).stat().st_size == 0]
+    if missing:
+        raise ValueError(
+            "Graph report is incomplete; missing or empty required sections: "
+            + ", ".join(missing)
+        )
+
+
 def _live_providers(args: argparse.Namespace):
     from .cache import EvidenceCache
     from .providers.market import YahooMarketProvider
@@ -226,7 +258,11 @@ def run_workflow(
             reports = graph.save_reports(state, args.ticker, save_path=run_dir / "reports")
             reports = Path(reports)
             if not reports.is_file() or reports.stat().st_size == 0:
-                raise ValueError("Graph did not create a non-empty report")
+                raise ValueError("Graph did not create a non-empty complete_report.md")
+            _validate_report_tree(
+                reports.parent,
+                tuple(args.analysts or ("market", "social", "news", "fundamentals")),
+            )
             manifest["reports_path"] = str(reports.resolve())
         manifest["status"] = "completed"
         _write_json(run_dir / "manifest.json", manifest)
