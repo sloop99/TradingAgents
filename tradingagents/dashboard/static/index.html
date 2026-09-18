@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Research Ledger</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#run-list">Skip to research runs</a>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="Research Ledger home">
+        <span class="brand-mark" aria-hidden="true">RL</span>
+        <span><strong>Research Ledger</strong><small>TradingAgents archive</small></span>
+      </a>
+      <div class="top-actions">
+        <label class="search-wrap">
+          <span class="sr-only">Search research runs</span>
+          <span aria-hidden="true">⌕</span>
+          <input id="search" type="search" placeholder="Search ticker or thesis" autocomplete="off">
+        </label>
+        <button class="button quiet" id="refresh" type="button">Refresh runs</button>
+      </div>
+    </header>
+
+    <aside class="rail" aria-label="Research filters">
+      <section class="rail-section">
+        <p class="eyebrow">Archive</p>
+        <nav id="ticker-nav" class="ticker-nav" aria-label="Companies"></nav>
+      </section>
+      <section class="rail-section filters">
+        <p class="eyebrow">View</p>
+        <label class="switch-row"><input id="latest-only" type="checkbox" checked><span>Latest run only</span></label>
+        <label class="switch-row"><input id="show-smoke" type="checkbox"><span>Show test runs</span></label>
+        <label class="switch-row"><input id="show-cost" type="checkbox"><span>Show position data</span></label>
+      </section>
+      <section class="rail-note">
+        <span class="status-dot"></span>
+        <span>Local and read-only</span>
+      </section>
+    </aside>
+
+    <main class="workspace">
+      <section class="intro" aria-labelledby="page-title">
+        <div>
+          <p class="eyebrow">Your decision history</p>
+          <h1 id="page-title">The work behind<br>every position.</h1>
+        </div>
+        <p class="intro-copy">Review conclusions in context, trace how a thesis changed, and keep evidence quality separate from a model rating.</p>
+      </section>
+
+      <section class="summary-strip" aria-label="Archive summary">
+        <div><span id="summary-runs">—</span><small>research runs</small></div>
+        <div><span id="summary-tickers">—</span><small>companies</small></div>
+        <div><span id="summary-date">—</span><small>latest analysis</small></div>
+        <div class="summary-note"><span class="legend conflict"></span><small>Evidence and valuation are graded separately</small></div>
+      </section>
+
+      <section class="tape-section" aria-labelledby="tape-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Research tape</p><h2 id="tape-title">Run chronology</h2></div>
+          <p id="tape-caption">Select a company to trace its analysis history.</p>
+        </div>
+        <div id="research-tape" class="research-tape" role="list"></div>
+      </section>
+
+      <section class="runs-section" aria-labelledby="runs-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Latest research</p><h2 id="runs-title">Analysis archive</h2></div>
+          <p id="result-count" aria-live="polite"></p>
+        </div>
+        <div id="run-list" class="run-list"></div>
+        <div id="empty" class="empty" hidden>
+          <strong>No research runs match this view.</strong>
+          <span>Clear the search or include older and test runs.</span>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="report-dialog" class="report-dialog">
+    <div class="dialog-frame">
+      <header class="dialog-header">
+        <div>
+          <p id="dialog-eyebrow" class="eyebrow"></p>
+          <h2 id="dialog-title">Research report</h2>
+        </div>
+        <button id="dialog-close" class="icon-button" type="button" aria-label="Close report">×</button>
+      </header>
+      <div class="dialog-body">
+        <nav id="section-tabs" class="section-tabs" aria-label="Report sections"></nav>
+        <article id="report-content" class="report-content"></article>
+      </div>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
