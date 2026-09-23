@@ -104,3 +104,14 @@ def test_graph_shares_packet_and_preserves_it_after_node_deltas(debug):
     assert 'Evidence packet: TEST' in captured['instrument_context']
     assert state['research_packet'] == packet.to_dict()
     assert state['evidence_status'] == 'unsupported'
+
+
+def test_filings_and_analyst_targets_are_on_by_default():
+    from tradingagents.research.workflow import parser
+
+    args = parser().parse_args(["AAPL"])
+    assert args.filings is True
+    assert args.analyst_targets is True
+    opted_out = parser().parse_args(["AAPL", "--no-filings", "--no-analyst-targets"])
+    assert opted_out.filings is False
+    assert opted_out.analyst_targets is False

@@ -49,9 +49,13 @@ export function formatDate(value, style = "day") {
   return style === "short" ? text.toUpperCase() : text;
 }
 
-export function money(value) {
+export function money(value, currency = "USD") {
   if (value == null || !Number.isFinite(Number(value))) return "—";
-  return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }).format(Number(value));
+  try {
+    return new Intl.NumberFormat("en-US", { style: "currency", currency: currency || "USD" }).format(Number(value));
+  } catch {
+    return `${Number(value).toFixed(2)} ${currency}`;
+  }
 }
 
 /** Fixed decimals with a real minus sign; `sign` adds a leading + for positives. */

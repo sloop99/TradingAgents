@@ -443,3 +443,35 @@ a { color: var(--acc); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; scroll-behavior: auto !important; }
 }
+
+/* ============================================================
+   Price targets (report header) and the latest-report card line
+   ============================================================ */
+.latest-targets { display: flex; gap: 14px; margin: -2px 0 8px; font: 600 11px var(--mono); color: var(--ink-2); }
+.targets { margin-top: 10px; }
+.targets-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+.target-stat .eyebrow { display: flex; align-items: center; gap: 6px; }
+.target-stat .eyebrow::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--mu); }
+.target-stat.is-model .eyebrow::before { background: var(--acc); }
+.target-stat.is-close .eyebrow::before { width: 2px; height: 10px; border-radius: 0; background: var(--ink); }
+.target-value { margin: 2px 0 0; font: 700 18px var(--mono); color: var(--ink); }
+.target-sub { margin: 1px 0 0; font: 11px var(--mono); color: var(--mu); }
+.range { margin-top: 12px; }
+.range-rows { position: relative; }
+.range-row { display: grid; grid-template-columns: 52px minmax(0, 1fr); align-items: center; height: 20px; }
+.range-label { font: 700 9px var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--mu); }
+.range-track { position: relative; height: 100%; }
+.range-track::before { content: ""; position: absolute; left: 0; right: 0; top: 50%; border-top: 1px dashed var(--line); }
+.range-bar { position: absolute; top: 50%; height: 6px; border-radius: 3px; transform: translateY(-50%); opacity: .4; }
+.range-bar.is-model { background: var(--acc); }
+.range-bar.is-street { background: var(--mu); }
+.range-mark { position: absolute; top: 50%; transform: translate(-50%, -50%); }
+.range-mark.is-model { width: 3px; height: 14px; background: var(--acc); }
+.range-mark.is-street { width: 9px; height: 9px; border-radius: 50%; background: var(--mu); }
+.range-layer { position: absolute; top: 0; bottom: 0; left: 52px; right: 0; pointer-events: none; }
+.range-close { position: absolute; top: -3px; bottom: -3px; border-left: 2px solid var(--ink); pointer-events: auto; cursor: help; }
+.range-axis { display: flex; justify-content: space-between; margin: 4px 0 0 52px; font: 9px var(--mono); color: var(--mu); }
+.target-basis { margin-top: 10px; font-size: 12px; color: var(--ink-2); }
+.target-basis summary { cursor: pointer; font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--acc); }
+.target-basis p { margin: 6px 0 0; line-height: 1.6; }
+.target-note { margin: 8px 0 0; font-size: 10.5px; color: var(--mu); }

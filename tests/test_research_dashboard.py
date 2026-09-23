@@ -18,12 +18,14 @@ def _write(path: Path, text: str) -> Path:
 
 
 def _rated_run(root: Path, ticker: str, date: str, decision: str, *, completed: str = "", context: str = "",
-               summary: str = "", stamp: str = "full") -> Path:
+               summary: str = "", stamp: str = "full", extra: str = "") -> Path:
     run = root / "runs" / f"{ticker}_{date}_{stamp}"
     _write(run / "report" / "complete_report.md", f"# Trading Analysis Report: {ticker}")
     body = f"**Rating**: {decision}"
     if summary:
         body += f"\n\n**Executive Summary**: {summary}\n\n**Investment Thesis**: Not part of the summary."
+    if extra:
+        body += "\n\n" + extra
     _write(run / "report" / "5_portfolio" / "decision.md", body)
     manifest = {"ticker": ticker, "analysis_date": date, "status": "completed", "final_rating": decision}
     if completed:
@@ -317,3 +319,40 @@ def test_nested_static_modules_are_served(dashboard_server):
 def test_static_paths_cannot_escape_the_static_folder(dashboard_server):
     status, _ = _get(dashboard_server, "/../server.py")
     assert status == 404
+
+
+def test_model_price_targets_are_read_from_the_final_decision(tmp_path):
+    _rated_run(tmp_path, "PANW", "2026-09-23", "Hold", extra=(
+        "**Price Target**: 264.5\n\n**Bear Case Target**: 210.0\n\n**Bull Case Target**: 310.0\n\n"
+        "**Target Basis**: 22x forward FCF;\nconsensus mean is 270.\n\n**Time Horizon**: 12 months"
+    ))
+    run = build_index([tmp_path]).public_payload()["runs"][0]
+    assert run["model_target"] == {
+        "base": 264.5, "bear": 210.0, "bull": 310.0, "basis": "22x forward FCF; consensus mean is 270.",
+    }
+
+
+def test_single_legacy_price_target_is_read(tmp_path):
+    _rated_run(tmp_path, "LUNR", "2026-08-24", "Underweight", extra="**Price Target**: $1,019.52")
+    run = build_index([tmp_path]).public_payload()["runs"][0]
+    assert run["model_target"] == {"base": 1019.52, "bear": None, "bull": None, "basis": None}
+
+
+def test_runs_without_targets_have_no_model_target(tmp_path):
+    _rated_run(tmp_path, "AMZN", "2026-09-01", "Overweight")
+    assert build_index([tmp_path]).public_payload()["runs"][0]["model_target"] is None
+
+
+def test_last_close_on_or_before_the_as_of_date_comes_from_the_evidence_packet(tmp_path):
+    run = _rated_run(tmp_path, "AAPL", "2026-09-23", "Hold")
+
+    def close(date, value, metric="close"):
+        return {"metric": metric, "value": value, "unit": "USD/share", "period_end": date}
+
+    _write(run / "packet.json", json.dumps({"ticker": "AAPL", "as_of": "2026-09-23", "facts": [
+        close("2026-09-19", 330.0), close("2026-09-22", 339.75),
+        close("2026-09-23", 1.0, metric="close_adjusted"), close("2026-09-24", 999.0),
+    ]}))
+    assert build_index([tmp_path]).public_payload()["runs"][0]["evidence_close"] == {
+        "value": 339.75, "date": "2026-09-22",
+    }

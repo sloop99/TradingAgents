@@ -299,8 +299,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--as-of", type=_as_of, default=datetime.now(timezone.utc).date().isoformat())
     result.add_argument("--horizon", default="long_term")
     result.add_argument("--thesis")
-    result.add_argument("--analyst-targets", action="store_true",
-                        help="Collect an optional current Yahoo aggregate analyst-target snapshot")
+    result.add_argument("--analyst-targets", action=argparse.BooleanOptionalAction, default=True,
+                        help="Collect a current Yahoo aggregate analyst-target snapshot (default: on)")
     result.add_argument("--analyst-records", type=Path,
                         help="Import sourced firm-level target JSON; compute averages without a model call")
     source = result.add_mutually_exclusive_group()
@@ -310,9 +310,9 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--cache-dir", type=Path, default=Path(".tradingagents/evidence-cache"))
     result.add_argument("--sec-user-agent", default=os.getenv("SEC_USER_AGENT", ""))
     result.add_argument("--no-market", action="store_true")
-    result.add_argument("--filings", action="store_true",
-                        help="Extract capital-structure candidates from recent SEC filings")
-    result.add_argument("--max-filings", type=int, choices=(1, 2, 3), default=1)
+    result.add_argument("--filings", action=argparse.BooleanOptionalAction, default=True,
+                        help="Extract capital-structure candidates from recent SEC filings (default: on)")
+    result.add_argument("--max-filings", type=int, choices=(1, 2, 3), default=2)
     result.add_argument("--run-agents", action="store_true", help="Opt in to normal graph/provider and LLM costs")
     result.add_argument("--analysts", type=_analysts,
                         help="Comma-separated graph analysts: market,social,news,fundamentals")

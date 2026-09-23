@@ -21,6 +21,13 @@ _EXECUTIVE_SUMMARY_RE = re.compile(
     r"\*\*Executive Summary\*\*\s*:\s*(.+?)(?:\r?\n[ \t]*\r?\n|\Z)", re.IGNORECASE | re.DOTALL
 )
 _EXECUTIVE_SUMMARY_LIMIT = 400
+_NUMBER = r"\$?\s*([\d,]+(?:\.\d+)?)"
+_TARGET_RES = {
+    "base": re.compile(r"\*\*Price Target\*\*\s*:\s*" + _NUMBER, re.IGNORECASE),
+    "bear": re.compile(r"\*\*Bear Case Target\*\*\s*:\s*" + _NUMBER, re.IGNORECASE),
+    "bull": re.compile(r"\*\*Bull Case Target\*\*\s*:\s*" + _NUMBER, re.IGNORECASE),
+}
+_TARGET_BASIS_RE = re.compile(r"\*\*Target Basis\*\*\s*:\s*(.+?)(?:\r?\n[ \t]*\r?\n|\Z)", re.IGNORECASE | re.DOTALL)
 
 # The five-tier scale the portfolio manager rates on, weakest to strongest.
 RATING_SCALE = {"sell": 1, "underweight": 2, "hold": 3, "overweight": 4, "buy": 5}
@@ -67,6 +74,8 @@ class ResearchRun:
     vendor_analyst_targets: list[dict[str, Any]] = field(default_factory=list)
     is_evidence_only: bool = False
     executive_summary: str | None = None
+    model_target: dict[str, Any] | None = None
+    evidence_close: dict[str, Any] | None = None
 
     @property
     def rating(self) -> str:
@@ -102,6 +111,8 @@ class ResearchRun:
             "is_evidence_only": self.is_evidence_only,
             "executive_summary": self.executive_summary,
             "rating": self.rating,
+            "model_target": self.model_target,
+            "evidence_close": self.evidence_close,
         }
 
 
@@ -282,6 +293,33 @@ def _executive_summary(decision_text: str) -> str | None:
     return summary[: _EXECUTIVE_SUMMARY_LIMIT - 1].rstrip() + "…"
 
 
+def _model_target(decision_text: str) -> dict[str, Any] | None:
+    """The portfolio manager's own 12-month targets, as rendered into decision.md."""
+    values = {}
+    for key, pattern in _TARGET_RES.items():
+        match = pattern.search(decision_text)
+        values[key] = float(match.group(1).replace(",", "")) if match else None
+    if values["base"] is None:
+        return None
+    basis = _TARGET_BASIS_RE.search(decision_text)
+    values["basis"] = " ".join(basis.group(1).split()) if basis else None
+    return values
+
+
+def _evidence_close(packet: dict[str, Any], as_of: str) -> dict[str, Any] | None:
+    """Latest daily close in the evidence packet on or before the analysis date."""
+    closes = [
+        fact for fact in packet.get("facts", [])
+        if isinstance(fact, dict) and fact.get("metric") == "close"
+        and isinstance(fact.get("value"), (int, float)) and not isinstance(fact.get("value"), bool)
+        and isinstance(fact.get("period_end"), str) and fact["period_end"][:10] <= as_of
+    ]
+    if not closes:
+        return None
+    latest = max(closes, key=lambda fact: fact["period_end"])
+    return {"value": float(latest["value"]), "date": latest["period_end"][:10]}
+
+
 def _parse_run(report: Path, source_root: Path) -> ResearchRun:
     report_dir = report.parent
     run_dir = report_dir.parent if report_dir.name in {"report", "reports"} else report_dir
@@ -398,6 +436,8 @@ def _parse_run(report: Path, source_root: Path) -> ResearchRun:
         vendor_analyst_targets=vendor_targets,
         is_evidence_only=evidence_only,
         executive_summary=_executive_summary(decision_text),
+        model_target=_model_target(decision_text),
+        evidence_close=_evidence_close(packet, analysis_date),
     )
 
 

@@ -7,6 +7,7 @@ import {
 } from "../format.js";
 import { renderMarkdown } from "../markdown.js";
 import { hasStructuredAnalyst, renderAnalyst } from "../research.js";
+import { renderTargets } from "../targets.js";
 import { errorPanel, loadingState } from "./shared.js";
 
 const ANALYST_SECTION = "Analyst expectations";
@@ -189,6 +190,8 @@ function header(run, previousRated) {
   const valuation = valuationLabel(run.valuation_status);
   if (valuation !== "—") fact("Valuation", valuation);
   head.append(facts);
+  const targets = renderTargets(run);
+  if (targets) head.append(targets);
 
   const warnings = Array.isArray(run.warnings) ? run.warnings : [];
   if (warnings.length) {

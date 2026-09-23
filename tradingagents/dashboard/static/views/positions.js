@@ -5,6 +5,7 @@ import {
   runHref, truncate, validSectorPoints, valuationLabel, verdictTag,
 } from "../format.js";
 import { mountSectorChart } from "../sector-chart.js";
+import { modelTarget, modelTitle, streetTargets, streetTitle } from "../targets.js";
 import { errorPanel, loadingState, sectorBanner, sectorMissing } from "./shared.js";
 
 const newestFirst = (a, b) =>
@@ -114,7 +115,7 @@ function positionsTable(title, rows, { withCost, isTest = false }, register) {
   const table = el("table", "ledger");
   table.append(el("caption", "sr-only", `${title}: one row per ticker, showing its latest rated run`));
   const head = el("tr");
-  [["Ticker"], ["Verdict"], ["Since last run"], ["Evidence", true], ["Valuation", true], ...(withCost ? [["Cost", true]] : []), ["Run"]]
+  [["Ticker"], ["Verdict"], ["Since last run"], ["Evidence", true], ["Valuation", true], ["Target", true], ["Street", true], ...(withCost ? [["Cost", true]] : []), ["Run"]]
     .forEach(([label, optional]) => {
       const th = el("th", optional ? "col-opt" : "", label);
       th.scope = "col";
@@ -147,7 +148,7 @@ function positionsTable(title, rows, { withCost, isTest = false }, register) {
     const valuation = valuationLabel(run.valuation_status);
     const valuationCell = el("td", `col-opt${valuation === "—" ? " muted" : ""}`, valuation);
 
-    const cells = [tickerCell, verdictCell, changeCell, evidenceCell, valuationCell];
+    const cells = [tickerCell, verdictCell, changeCell, evidenceCell, valuationCell, targetCell(run), streetCell(run)];
     if (withCost) cells.push(costCell(run));
     const dateCell = el("td", "num muted", formatDate(run.analysis_date, "short"));
     dateCell.title = formatDate(run.analysis_date, "long");
@@ -158,6 +159,20 @@ function positionsTable(title, rows, { withCost, isTest = false }, register) {
   });
   table.append(thead, tbody);
   return table;
+}
+
+function targetCell(run) {
+  const target = modelTarget(run);
+  const cell = el("td", `num col-opt${target ? "" : " muted"}`, target ? money(target.base) : "—");
+  if (target) cell.title = modelTitle(target);
+  return cell;
+}
+
+function streetCell(run) {
+  const street = streetTargets(run);
+  const cell = el("td", `num col-opt${street ? "" : " muted"}`, street ? money(street.mean, street.currency) : "—");
+  if (street) cell.title = streetTitle(street);
+  return cell;
 }
 
 function costCell(run) {
@@ -192,6 +207,14 @@ function latestReportCard(rows) {
   panel.append(title);
   const excerpt = run.executive_summary || run.decision_interpretation || run.thesis;
   if (excerpt) panel.append(el("p", "latest-excerpt", truncate(excerpt, 200)));
+  const target = modelTarget(run);
+  const street = streetTargets(run);
+  if (target || street) {
+    const line = el("p", "latest-targets");
+    if (target) line.append(el("span", "", `Target ${money(target.base)}`));
+    if (street) line.append(el("span", "", `Street ${money(street.mean, street.currency)}`));
+    panel.append(line);
+  }
   panel.append(link(runHref(run.id), "link-action", "Read report →"));
   return panel;
 }
