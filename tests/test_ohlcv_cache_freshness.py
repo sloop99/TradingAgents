@@ -107,3 +107,56 @@ def test_load_ohlcv_reuses_fresh_same_day_cache(tmp_path, monkeypatch):
 
     monkeypatch.setattr(su.yf, "download", _fail_download)
     su.load_ohlcv("AAPL", TODAY.strftime("%Y-%m-%d"))
+
+
+def _stale_cache_and_download(tmp_path, monkeypatch):
+    monkeypatch.setattr(su, "get_config", lambda: {"data_cache_dir": str(tmp_path)})
+    monkeypatch.setattr(su.pd.Timestamp, "today", staticmethod(lambda: TODAY))
+    start = (TODAY - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
+    end = (TODAY + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
+    cache_file = tmp_path / f"AMZN-YFin-data-{start}-{end}.csv"
+    pd.DataFrame({"Date": ["2026-07-17"], "Close": [100.0]}).to_csv(cache_file, index=False)
+    old = time.time() - STALE
+    os.utime(cache_file, (old, old))
+    monkeypatch.setattr(su.yf, "download", lambda *a, **k: pd.DataFrame(
+        {"Date": pd.to_datetime(["2026-07-17", "2026-07-18"]), "Close": [100.0, 222.0]}
+    ).set_index("Date"))
+    return cache_file
+
+
+@pytest.mark.unit
+def test_refreshed_cache_is_never_written_in_place(tmp_path, monkeypatch):
+    """Parallel tool calls read this file while another refreshes it; an in-place
+    write let a reader see a half-written file (rows ending years ago) and reject
+    the ticker as stale. The refresh must write elsewhere and swap it in whole."""
+    cache_file = _stale_cache_and_download(tmp_path, monkeypatch)
+    targets = []
+    original = pd.DataFrame.to_csv
+
+    def spy(self, path_or_buf=None, *args, **kwargs):
+        targets.append(str(path_or_buf))
+        return original(self, path_or_buf, *args, **kwargs)
+
+    monkeypatch.setattr(pd.DataFrame, "to_csv", spy)
+    out = su.load_ohlcv("AMZN", TODAY.strftime("%Y-%m-%d"))
+
+    assert targets and all(target != str(cache_file) for target in targets)
+    assert pd.read_csv(cache_file)["Close"].tolist() == [100.0, 222.0]
+    assert 222.0 in out["Close"].values
+    assert [p.name for p in tmp_path.iterdir()] == [cache_file.name]
+
+
+@pytest.mark.unit
+def test_blocked_cache_swap_still_serves_the_fresh_download(tmp_path, monkeypatch):
+    # On Windows the swap fails while another reader holds the old file open.
+    cache_file = _stale_cache_and_download(tmp_path, monkeypatch)
+
+    def locked(*_args, **_kwargs):
+        raise PermissionError("file in use")
+
+    monkeypatch.setattr(su.os, "replace", locked)
+    monkeypatch.setattr(su.time, "sleep", lambda _seconds: None)
+    out = su.load_ohlcv("AMZN", TODAY.strftime("%Y-%m-%d"))
+
+    assert 222.0 in out["Close"].values
+    assert [p.name for p in tmp_path.iterdir()] == [cache_file.name]

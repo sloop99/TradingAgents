@@ -1,5 +1,6 @@
 import logging
 import os
+import tempfile
 import time
 from typing import Annotated
 
@@ -145,6 +146,33 @@ def _needs_same_day_refresh(data_file, curr_date_dt, today_date) -> bool:
     return time.time() - os.path.getmtime(data_file) > OHLCV_CACHE_TTL_SECONDS
 
 
+def _write_cache_atomically(frame: pd.DataFrame, path: str) -> None:
+    """Write beside ``path`` and swap it in, so a concurrent reader never sees a half-written file.
+
+    Analysts fire several data tools at once, and a same-day refresh used to
+    rewrite the cache in place while another tool read it: the reader got rows
+    ending years ago and rejected the ticker as stale. If the swap stays blocked
+    (Windows refuses while a reader holds the old file open), the old cache is
+    kept and the caller still uses the fresh frame.
+    """
+    fd, temp_path = tempfile.mkstemp(
+        prefix=os.path.basename(path) + ".", suffix=".tmp", dir=os.path.dirname(path) or "."
+    )
+    os.close(fd)
+    try:
+        frame.to_csv(temp_path, index=False, encoding="utf-8")
+        for attempt in range(5):
+            try:
+                os.replace(temp_path, path)
+                return
+            except PermissionError:
+                time.sleep(0.05 * (attempt + 1))
+        logger.warning("Could not refresh OHLCV cache %s (file in use); keeping the previous copy", path)
+    finally:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+
+
 def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
     """Fetch OHLCV data with caching, filtered to prevent look-ahead bias.
 
@@ -206,7 +234,7 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
             raise NoMarketDataError(
                 symbol, canonical, "Yahoo Finance returned no rows"
             )
-        downloaded.to_csv(data_file, index=False, encoding="utf-8")
+        _write_cache_atomically(downloaded, data_file)
         data = downloaded
 
     data = _clean_dataframe(data)
