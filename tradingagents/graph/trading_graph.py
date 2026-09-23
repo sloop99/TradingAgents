@@ -92,23 +92,25 @@ class TradingAgentsGraph:
         os.makedirs(self.config["results_dir"], exist_ok=True)
 
         # Initialize LLMs with provider-specific thinking configuration
-        llm_kwargs = self._get_provider_kwargs()
+        deep_kwargs = self._get_provider_kwargs("deep")
+        quick_kwargs = self._get_provider_kwargs("quick")
 
         # Add callbacks to kwargs if provided (passed to LLM constructor)
         if self.callbacks:
-            llm_kwargs["callbacks"] = self.callbacks
+            deep_kwargs["callbacks"] = self.callbacks
+            quick_kwargs["callbacks"] = self.callbacks
 
         deep_client = create_llm_client(
             provider=self.config["llm_provider"],
             model=self.config["deep_think_llm"],
             base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+            **deep_kwargs,
         )
         quick_client = create_llm_client(
             provider=self.config["llm_provider"],
             model=self.config["quick_think_llm"],
             base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+            **quick_kwargs,
         )
 
         self.deep_thinking_llm = deep_client.get_llm()
@@ -152,8 +154,12 @@ class TradingAgentsGraph:
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
 
-    def _get_provider_kwargs(self) -> dict[str, Any]:
-        """Get provider-specific kwargs for LLM client creation."""
+    def _get_provider_kwargs(self, role: str | None = None) -> dict[str, Any]:
+        """Get provider-specific kwargs for LLM client creation.
+
+        ``role`` ("deep" or "quick") applies that role's effort override, so the
+        managers can reason harder than the many analyst and debate calls.
+        """
         kwargs = {}
         provider = self.config.get("llm_provider", "").lower()
 
@@ -171,6 +177,13 @@ class TradingAgentsGraph:
             effort = self.config.get("anthropic_effort")
             if effort:
                 kwargs["effort"] = effort
+
+        role_effort = self.config.get(f"{role}_think_effort") if role else None
+        if role_effort:
+            if provider in ("openai", "codex_subscription"):
+                kwargs["reasoning_effort"] = role_effort
+            elif provider in ("anthropic", "claude_subscription"):
+                kwargs["effort"] = role_effort
 
         # Sampling temperature is cross-provider: forward it whenever set.
         # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env

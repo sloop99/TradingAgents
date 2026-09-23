@@ -25,6 +25,10 @@ _ENV_OVERRIDES = {
     "TRADINGAGENTS_GOOGLE_THINKING_LEVEL":   "google_thinking_level",
     "TRADINGAGENTS_OPENAI_REASONING_EFFORT": "openai_reasoning_effort",
     "TRADINGAGENTS_ANTHROPIC_EFFORT":        "anthropic_effort",
+    # Per-role overrides of the effort above: deep = research/portfolio
+    # managers, quick = analysts, debaters and the trader.
+    "TRADINGAGENTS_DEEP_THINK_EFFORT":       "deep_think_effort",
+    "TRADINGAGENTS_QUICK_THINK_EFFORT":      "quick_think_effort",
 }
 
 
@@ -91,6 +95,10 @@ DEFAULT_CONFIG = _apply_env_overrides({
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
     "anthropic_effort": None,           # "high", "medium", "low"
+    # Optional per-role effort (OpenAI/Codex reasoning effort or Claude effort);
+    # None falls back to the provider-wide setting above.
+    "deep_think_effort": None,
+    "quick_think_effort": None,
     # Sampling temperature, forwarded to every provider when set. None leaves
     # each provider at its own default. Lower values reduce run-to-run
     # variation on models that honor it; reasoning models largely ignore it
