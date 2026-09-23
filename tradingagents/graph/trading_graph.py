@@ -363,6 +363,9 @@ class TradingAgentsGraph:
         digest = getattr(self, "_research_packet_digest", "")
         if digest:
             parts.append(f"evidence={digest}")
+        target_digest = getattr(self, "_analyst_target_digest", "")
+        if target_digest:
+            parts.append(f"analyst_targets={target_digest}")
         return "|".join(parts)
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock"):
@@ -379,6 +382,9 @@ class TradingAgentsGraph:
 
         self._research_packet = None
         self._research_packet_digest = ""
+        self._analyst_consensus = None
+        self._analyst_target_input = None
+        self._analyst_target_digest = ""
         packet_path = self.config.get("research_packet_path")
         if packet_path:
             if asset_type != "stock":
@@ -388,6 +394,17 @@ class TradingAgentsGraph:
             self._research_packet, self._research_packet_digest = load_packet(
                 packet_path, company_name, str(trade_date)
             )
+
+        target_path = self.config.get("analyst_target_input_path")
+        if target_path:
+            if asset_type != "stock":
+                raise ValueError("Analyst price targets require asset_type='stock'")
+            from tradingagents.research.expectations import load_target_import
+
+            (
+                self._analyst_consensus, self._analyst_target_input,
+                self._analyst_target_digest, _raw,
+            ) = load_target_import(target_path, company_name, str(trade_date))
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(company_name)
@@ -443,6 +460,11 @@ class TradingAgentsGraph:
         packet = getattr(self, "_research_packet", None)
         if packet is not None:
             instrument_context += "\n\n" + packet.render_context()
+        consensus = getattr(self, "_analyst_consensus", None)
+        if consensus is not None:
+            from tradingagents.research.expectations import expectations_context
+
+            instrument_context += "\n\n" + expectations_context(consensus)
         init_agent_state = self.propagator.create_initial_state(
             company_name,
             trade_date,
@@ -454,6 +476,9 @@ class TradingAgentsGraph:
         if packet is not None:
             init_agent_state["research_packet"] = packet.to_dict()
             init_agent_state["evidence_status"] = packet.status.value
+        if consensus is not None:
+            init_agent_state["analyst_consensus"] = consensus
+            init_agent_state["analyst_target_input"] = self._analyst_target_input
 
         # Inject thread_id so same ticker+date+graph-shape resumes; a different
         # date or graph shape starts fresh (#1089).
@@ -487,6 +512,9 @@ class TradingAgentsGraph:
         if packet is not None:
             final_state["research_packet"] = packet.to_dict()
             final_state["evidence_status"] = packet.status.value
+        if consensus is not None:
+            final_state["analyst_consensus"] = consensus
+            final_state["analyst_target_input"] = self._analyst_target_input
 
         # Store current state for reflection.
         self.curr_state = final_state

@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +46,9 @@ class ResearchRun:
     is_smoke: bool
     warnings: list[str] = field(default_factory=list)
     is_latest: bool = False
+    analyst_consensus: dict[str, Any] | None = None
+    vendor_analyst_targets: list[dict[str, Any]] = field(default_factory=list)
+    is_evidence_only: bool = False
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -71,6 +75,9 @@ class ResearchRun:
             "is_smoke": self.is_smoke,
             "warnings": self.warnings,
             "is_latest": self.is_latest,
+            "analyst_consensus": self.analyst_consensus,
+            "vendor_analyst_targets": self.vendor_analyst_targets,
+            "is_evidence_only": self.is_evidence_only,
         }
 
 
@@ -124,8 +131,15 @@ def build_index(roots: list[Path] | None = None) -> ResearchIndex:
     seen: set[Path] = set()
     for root in resolved:
         try:
-            reports = root.rglob("complete_report.md")
+            reports = chain(root.rglob("complete_report.md"), root.rglob("research-brief.md"))
             for report in reports:
+                if report.name == "research-brief.md":
+                    if not (report.parent / "manifest.json").is_file():
+                        continue
+                    if any((report.parent / p).is_file() for p in (
+                        "complete_report.md", "report/complete_report.md", "reports/complete_report.md",
+                    )):
+                        continue
                 report = report.resolve()
                 if report in seen or not report.is_file():
                     continue
@@ -140,7 +154,7 @@ def build_index(roots: list[Path] | None = None) -> ResearchIndex:
     _carry_forward_position_costs(runs)
     latest: dict[str, ResearchRun] = {}
     for run in runs:
-        if run.is_smoke:
+        if run.is_smoke or run.status != "completed":
             continue
         latest.setdefault(run.ticker, run)
     for run in latest.values():
@@ -190,6 +204,9 @@ def _parse_run(report: Path, source_root: Path) -> ResearchRun:
 
     ticker, analysis_date = _ticker_and_date(manifest, packet, report, complete_text)
     decision = _decision(manifest, decision_text, complete_text)
+    evidence_only = report.name == "research-brief.md"
+    if evidence_only:
+        decision = "Evidence only"
     context = " ".join(
         str(value or "")
         for value in (
@@ -227,6 +244,34 @@ def _parse_run(report: Path, source_root: Path) -> ResearchRun:
     run_warnings = [manifest_warning] if manifest_warning else []
     if not manifest:
         run_warnings.append("Legacy run: metadata inferred from report and path.")
+    consensus = None
+    target_input = next((p for p in (
+        run_dir / "analyst-target-input.json",
+        report_dir / "0_evidence" / "analyst-target-input.json",
+    ) if p.is_file()), None)
+    if target_input is not None:
+        from tradingagents.research.expectations import load_target_import
+
+        try:
+            consensus, _payload, digest, _raw = load_target_import(
+                target_input, ticker, str(manifest.get("as_of") or analysis_date),
+            )
+            expected = manifest.get("analyst_target_input_sha256")
+            if expected and digest != expected:
+                consensus = None
+                run_warnings.append("Analyst targets withheld: imported source hash changed.")
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            run_warnings.append(f"Analyst targets withheld: {type(exc).__name__}: {exc}")
+    vendor_targets = []
+    raw_targets = financial.get("analyst_targets", {})
+    if isinstance(raw_targets, dict):
+        from tradingagents.research.providers.analyst import validate_snapshot
+
+        snapshots = raw_targets.get("snapshots", [])
+        for snapshot in snapshots if isinstance(snapshots, list) else []:
+            valid = validate_snapshot(snapshot, ticker, str(manifest.get("as_of") or analysis_date))
+            if valid is not None:
+                vendor_targets.append(valid)
     status = str(manifest.get("status") or "completed").strip().lower()
     if status in {"complete", "success"}:
         status = "completed"
@@ -260,6 +305,9 @@ def _parse_run(report: Path, source_root: Path) -> ResearchRun:
         relative_path=relative,
         is_smoke=smoke,
         warnings=run_warnings,
+        analyst_consensus=consensus,
+        vendor_analyst_targets=vendor_targets,
+        is_evidence_only=evidence_only,
     )
 
 
@@ -367,7 +415,12 @@ def _sections(report_dir: Path, run_dir: Path) -> dict[str, Path]:
         "Conservative risk": report_dir / "4_risk" / "conservative.md",
         "Neutral risk": report_dir / "4_risk" / "neutral.md",
         "Research brief": run_dir / "research-brief.md",
+        "Analyst expectations": run_dir / "analyst-expectations.md",
     }
+    if not candidates["Analyst expectations"].is_file():
+        candidates["Analyst expectations"] = report_dir / "0_evidence" / "analyst-expectations.md"
+    if not candidates["Evidence coverage"].is_file():
+        candidates["Evidence coverage"] = run_dir / "coverage.md"
     return {name: path.resolve() for name, path in candidates.items() if path.is_file() and path.stat().st_size}
 
 

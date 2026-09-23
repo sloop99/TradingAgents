@@ -58,6 +58,16 @@
         <div class="summary-note"><span class="legend conflict"></span><small>Evidence and valuation are graded separately</small></div>
       </section>
 
+      <section class="sector-section" aria-labelledby="sector-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">Market context</p><h2 id="sector-title">Sector rotation</h2></div>
+          <p id="sector-caption">Relative performance across observed sector funds</p>
+        </div>
+        <div id="sector-overview" class="sector-overview" aria-live="polite">
+          <p class="sector-empty">Loading sector observations…</p>
+        </div>
+      </section>
+
       <section class="tape-section" aria-labelledby="tape-title">
         <div class="section-heading">
           <div><p class="eyebrow">Research tape</p><h2 id="tape-title">Run chronology</h2></div>
@@ -97,6 +107,7 @@
   </dialog>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script src="/research.js" defer></script>
   <script src="/app.js" defer></script>
 </body>
 </html>

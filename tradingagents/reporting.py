@@ -37,6 +37,24 @@ def write_report_tree(final_state: dict, ticker: str, save_path) -> Path:
             "may retrieve newer information; this is not a point-in-time backtest guarantee."
         )
 
+    if final_state.get("analyst_consensus"):
+        from tradingagents.research.analyst_consensus import render_consensus_markdown
+
+        target_dir = save_path / "0_evidence"
+        target_dir.mkdir(exist_ok=True)
+        consensus = final_state["analyst_consensus"]
+        target_markdown = render_consensus_markdown(consensus)
+        (target_dir / "analyst-consensus.json").write_text(
+            json.dumps(consensus, indent=2, ensure_ascii=False, allow_nan=False), encoding="utf-8",
+        )
+        if final_state.get("analyst_target_input"):
+            (target_dir / "analyst-target-input.json").write_text(
+                json.dumps(final_state["analyst_target_input"], indent=2, allow_nan=False),
+                encoding="utf-8",
+            )
+        (target_dir / "analyst-expectations.md").write_text(target_markdown, encoding="utf-8")
+        sections.append(target_markdown)
+
     # 1. Analysts
     analysts_dir = save_path / "1_analysts"
     analyst_parts = []

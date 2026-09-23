@@ -12,11 +12,13 @@ from threading import Lock
 from urllib.parse import parse_qs, urlparse
 
 from .indexer import ResearchIndex, build_index
+from .sectors import load_sector_snapshot
 
 
 class DashboardState:
-    def __init__(self, roots: list[Path]):
+    def __init__(self, roots: list[Path], sector_file: Path | None = None):
         self.roots = roots
+        self.sector_file = sector_file or (roots[0] / "sector-rotation.json" if roots else None)
         self._lock = Lock()
         self.index = build_index(roots)
 
@@ -34,6 +36,9 @@ def handler_factory(state: DashboardState):
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urlparse(self.path)
+            if parsed.path == "/api/sectors":
+                self._json(load_sector_snapshot(state.sector_file))
+                return
             if parsed.path == "/api/runs":
                 self._json(state.index.public_payload())
                 return
@@ -107,10 +112,11 @@ def serve(
     port: int = 8791,
     *,
     open_browser: bool = False,
+    sector_file: Path | None = None,
 ) -> None:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("The research dashboard only binds to a local loopback address")
-    state = DashboardState(roots)
+    state = DashboardState(roots, sector_file=sector_file)
     server = ThreadingHTTPServer((host, port), handler_factory(state))
     if open_browser:
         webbrowser.open(f"http://{host}:{port}")

@@ -220,6 +220,24 @@ def run_workflow(
         brief_path = run_dir / "research-brief.md"
         brief_path.write_text(create_research_brief(packet), encoding="utf-8")
         manifest["research_brief_path"] = str(brief_path.resolve())
+        target_input_path = None
+        if getattr(args, "analyst_records", None):
+            from .analyst_consensus import render_consensus_markdown
+            from .expectations import load_target_import
+
+            consensus, _input, target_digest, raw = load_target_import(
+                args.analyst_records, args.ticker, args.as_of,
+            )
+            target_input_path = run_dir / "analyst-target-input.json"
+            target_input_path.write_bytes(raw)
+            _write_json(run_dir / "analyst-consensus.json", consensus)
+            markdown = render_consensus_markdown(consensus)
+            (run_dir / "analyst-expectations.md").write_text(markdown, encoding="utf-8")
+            with brief_path.open("a", encoding="utf-8") as brief:
+                brief.write("\n\n" + markdown)
+            manifest["analyst_target_input_sha256"] = target_digest
+            manifest["analyst_target_input_path"] = str(target_input_path.resolve())
+            manifest["analyst_consensus_path"] = str((run_dir / "analyst-consensus.json").resolve())
         if args.run_agents:
             blockers = []
             if packet.identity is None or not packet.identity.name:
@@ -233,6 +251,8 @@ def run_workflow(
             _write_json(run_dir / "manifest.json", manifest)
             config = DEFAULT_CONFIG.copy()
             config["research_packet_path"] = str(packet_path.resolve())
+            if target_input_path is not None:
+                config["analyst_target_input_path"] = str(target_input_path.resolve())
             if args.llm_provider:
                 config["llm_provider"] = args.llm_provider
             if args.quick_model:
@@ -281,6 +301,8 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--thesis")
     result.add_argument("--analyst-targets", action="store_true",
                         help="Collect an optional current Yahoo aggregate analyst-target snapshot")
+    result.add_argument("--analyst-records", type=Path,
+                        help="Import sourced firm-level target JSON; compute averages without a model call")
     source = result.add_mutually_exclusive_group()
     source.add_argument("--packet", type=Path, help="Existing packet; exact bytes are retained in the new run")
     source.add_argument("--fixture", action="append", type=Path, default=[], help="Offline provider JSON; repeatable")

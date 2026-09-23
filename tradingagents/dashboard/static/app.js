@@ -5,6 +5,7 @@ const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener("DOMContentLoaded", async () => {
   bindControls();
+  ResearchFeatures.loadSectors();
   await loadRuns();
 });
 
@@ -39,6 +40,7 @@ async function refreshRuns() {
     if (!response.ok) throw new Error(`Refresh failed (${response.status})`);
     state.payload = await response.json();
     render();
+    ResearchFeatures.loadSectors();
     showToast("Research archive refreshed");
   } catch (error) {
     showToast(error.message);
@@ -93,13 +95,19 @@ function tickerButton(value, count, label) {
 function filteredRuns(runs) {
   const query = $("#search").value.trim().toLowerCase();
   const latestOnly = $("#latest-only").checked;
+  const showPositionData = $("#show-cost").checked;
   return runs.filter((run) => {
     if (state.selectedTicker !== "ALL" && run.ticker !== state.selectedTicker) return false;
     if (latestOnly && !run.is_latest) return false;
     if (!query) return true;
-    return [run.ticker, run.decision, run.thesis, run.perspective, run.analysis_date]
+    const searchableThesis = showPositionData || !isPositionRun(run) ? run.thesis : "";
+    return [run.ticker, run.decision, searchableThesis, run.perspective, run.analysis_date]
       .some((value) => String(value || "").toLowerCase().includes(query));
   });
+}
+
+function isPositionRun(run) {
+  return run.perspective === "Existing holder" || run.average_cost_usd != null;
 }
 
 function renderTape(runs) {
@@ -144,13 +152,16 @@ function runCard(run, index) {
   lockup.append(el("span", "ticker-symbol", run.ticker));
   if (run.is_latest) lockup.append(el("span", "latest-chip", "Latest"));
   top.append(lockup, el("time", "card-date", formatDate(run.analysis_date, { month: "short", day: "numeric", year: "numeric" })));
-  const context = run.decision_interpretation || run.thesis || "Open the report for the full research context.";
+  const context = isPositionRun(run) && !$("#show-cost").checked
+    ? "Position context hidden. Turn on Show position data to view this summary."
+    : run.decision_interpretation || run.thesis || "Open the report for the full research context.";
   card.append(top, el("div", "card-decision", run.decision), el("div", "card-context", truncate(context, 150)));
 
   const meta = el("div", "card-meta");
   meta.append(badge(run.perspective), badge(`Evidence: ${evidenceLabel(run.evidence_status)}`, evidenceClass(run.evidence_status)));
   meta.append(badge(`Valuation: ${capitalize(run.valuation_status)}`, run.valuation_status === "unsupported" ? "warning" : ""));
   if (run.is_smoke) meta.append(badge("Test run", "warning"));
+  if (run.analyst_consensus?.cohorts?.length) meta.append(badge("Analyst expectations"));
   card.append(meta);
   if ($("#show-cost").checked && run.average_cost_usd != null) {
     const costDate = run.average_cost_as_of && run.average_cost_as_of !== run.analysis_date
@@ -168,18 +179,45 @@ function badge(text, modifier = "") {
 
 async function openReport(run) {
   state.activeRun = run;
-  const preferred = run.sections.includes("Final decision") ? "Final decision" : run.sections[0];
+  const { sections } = analystTabPolicy(run);
+  const preferred = sections.includes("Final decision") ? "Final decision" : sections[0] || "analyst-expectations";
   $("#dialog-eyebrow").textContent = `${run.ticker} · ${formatDate(run.analysis_date, { month: "long", day: "numeric", year: "numeric" })}`;
   $("#dialog-title").textContent = `${run.decision} · ${run.perspective}`;
   renderTabs(run, preferred);
   $("#report-dialog").showModal();
-  await loadSection(run, preferred);
+  if (preferred === "analyst-expectations") {
+    state.activeSection = preferred;
+    ResearchFeatures.renderAnalyst(run, $("#report-content"));
+  } else {
+    await loadSection(run, preferred);
+  }
+}
+
+function analystTabPolicy(run) {
+  const hasStructured = Boolean(run.analyst_consensus || run.vendor_analyst_targets?.length);
+  const hasRaw = run.sections.some((section) => section.trim().toLowerCase() === "analyst expectations");
+  return {
+    showStructured: hasStructured || !hasRaw,
+    sections: hasStructured
+      ? run.sections.filter((section) => section.trim().toLowerCase() !== "analyst expectations")
+      : run.sections,
+  };
 }
 
 function renderTabs(run, selected) {
   const tabs = $("#section-tabs");
   tabs.replaceChildren();
-  run.sections.forEach((section) => {
+  const { showStructured, sections } = analystTabPolicy(run);
+  if (showStructured) {
+    ResearchFeatures.appendAnalystTab(tabs, run, (button) => {
+      state.activeSection = "analyst-expectations";
+      tabs.querySelectorAll(".tab").forEach((node) => node.classList.remove("active"));
+      button.classList.add("active");
+      ResearchFeatures.renderAnalyst(run, $("#report-content"));
+    });
+    tabs.lastElementChild.classList.toggle("active", selected === "analyst-expectations");
+  }
+  sections.forEach((section) => {
     const button = el("button", "tab", section);
     button.type = "button";
     button.classList.toggle("active", section === selected);
@@ -193,6 +231,7 @@ function renderTabs(run, selected) {
 }
 
 async function loadSection(run, section) {
+  state.activeSection = section;
   const content = $("#report-content");
   content.replaceChildren(el("p", "report-loading", "Loading report…"));
   try {
@@ -200,9 +239,11 @@ async function loadSection(run, section) {
     const response = await fetch(url, { cache: "no-store" });
     if (!response.ok) throw new Error(`Report request failed (${response.status})`);
     const payload = await response.json();
+    if (state.activeRun !== run || state.activeSection !== section) return;
     content.replaceChildren(renderMarkdown(payload.markdown));
     content.scrollTop = 0;
   } catch (error) {
+    if (state.activeRun !== run || state.activeSection !== section) return;
     content.replaceChildren(el("p", "report-loading", error.message));
   }
 }

@@ -1,0 +1,83 @@
+{
+  "ticker": "DEMO",
+  "security_id": "DEMO-COMMON-001",
+  "max_age_days": 90,
+  "max_quote_age_days": 7,
+  "top_percentile": 20,
+  "records": [
+    {
+      "firm_id": "example_research_one",
+      "firm": "Example Research One",
+      "security_id": "DEMO-COMMON-001",
+      "target": 60,
+      "currency": "USD",
+      "share_basis": "common shares",
+      "horizon_months": 12,
+      "published_at": "2026-09-21T14:00:00Z",
+      "retrieved_at": "2026-09-22T12:00:00Z",
+      "source_url": "https://research.example/demo/one-target",
+      "rating": "Overweight",
+      "action": "initiated",
+      "ranking": {
+        "rank": 1,
+        "universe_size": 15,
+        "provider": "Example Rankings (fictional)",
+        "method": "Illustrative normalized coverage-and-history score, descending; fictional only",
+        "as_of": "2026-09-21",
+        "source_url": "https://rankings.example/demo/2026-09-21"
+      }
+    },
+    {
+      "firm_id": "example_research_two",
+      "firm": "Example Research Two",
+      "security_id": "DEMO-COMMON-001",
+      "target": 68,
+      "currency": "USD",
+      "share_basis": "common shares",
+      "horizon_months": 12,
+      "published_at": "2026-09-21T15:00:00Z",
+      "retrieved_at": "2026-09-22T12:10:00Z",
+      "source_url": "https://research.example/demo/two-target",
+      "rating": "Neutral",
+      "action": "maintained",
+      "ranking": {
+        "rank": 2,
+        "universe_size": 15,
+        "provider": "Example Rankings (fictional)",
+        "method": "Illustrative normalized coverage-and-history score, descending; fictional only",
+        "as_of": "2026-09-21",
+        "source_url": "https://rankings.example/demo/2026-09-21"
+      }
+    },
+    {
+      "firm_id": "example_research_three",
+      "firm": "Example Research Three",
+      "security_id": "DEMO-COMMON-001",
+      "target": 76,
+      "currency": "USD",
+      "share_basis": "common shares",
+      "horizon_months": 12,
+      "published_at": "2026-09-21T16:00:00Z",
+      "retrieved_at": "2026-09-22T12:20:00Z",
+      "source_url": "https://research.example/demo/three-target",
+      "rating": "Buy",
+      "action": "raised",
+      "ranking": {
+        "rank": 3,
+        "universe_size": 15,
+        "provider": "Example Rankings (fictional)",
+        "method": "Illustrative normalized coverage-and-history score, descending; fictional only",
+        "as_of": "2026-09-21",
+        "source_url": "https://rankings.example/demo/2026-09-21"
+      }
+    }
+  ],
+  "quote": {
+    "price": 50,
+    "currency": "USD",
+    "security_id": "DEMO-COMMON-001",
+    "share_basis": "common shares",
+    "observed_at": "2026-09-22T15:00:00Z",
+    "source_url": "https://quotes.example/demo/2026-09-22"
+  }
+}
