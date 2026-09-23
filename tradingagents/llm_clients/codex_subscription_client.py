@@ -156,7 +156,7 @@ class CodexSubscriptionChatModel(BaseChatModel):
             ]
             message = AIMessage(content=payload.get("content", ""), tool_calls=tool_calls)
         else:
-            message = AIMessage(content=self._run_codex(self._build_prompt(messages)))
+            message = AIMessage(content=self._complete(self._build_prompt(messages)))
         return ChatResult(generations=[ChatGeneration(message=message)])
 
     def _invoke_tools(self, messages: list[BaseMessage]) -> dict[str, Any]:
@@ -191,14 +191,14 @@ class CodexSubscriptionChatModel(BaseChatModel):
         }
         tool_text = json.dumps(self.bound_tools, ensure_ascii=False, indent=2)
         instructions = (
-            "The application exposes the tools below. Do not execute Codex built-in tools. "
+            "The application exposes the tools below. Do not execute any built-in tools. "
             "If the transcript requires missing data, return the necessary application tool "
             "calls with exact names and JSON arguments, and set content to an empty string. "
             "If tool results are already present and sufficient, return the final answer in "
             "content with an empty tool_calls array.\n\nAPPLICATION TOOLS:\n"
             + tool_text
         )
-        raw = self._run_codex(self._build_prompt(messages, instructions), schema)
+        raw = self._complete(self._build_prompt(messages, instructions), schema)
         return json.loads(raw)
 
     def _invoke_schema(
@@ -215,10 +215,10 @@ class CodexSubscriptionChatModel(BaseChatModel):
             json_schema = schema
 
         instructions = (
-            "Return only an instance of the requested response schema. Do not use Codex "
+            "Return only an instance of the requested response schema. Do not use any "
             "built-in tools, inspect files, or browse the web. Use only the transcript."
         )
-        raw = self._run_codex(self._build_prompt(messages, instructions), json_schema)
+        raw = self._complete(self._build_prompt(messages, instructions), json_schema)
         payload = json.loads(raw)
         return schema.model_validate(payload) if is_model else payload
 
@@ -250,6 +250,10 @@ class CodexSubscriptionChatModel(BaseChatModel):
         if extra_instructions:
             header += "\n" + extra_instructions + "\n"
         return header + "\nMESSAGE TRANSCRIPT:\n\n" + "\n\n".join(transcript)
+
+    def _complete(self, prompt: str, output_schema: dict[str, Any] | None = None) -> str:
+        """Run one completion; subclasses swap in a different subscription CLI."""
+        return self._run_codex(prompt, output_schema)
 
     def _run_codex(self, prompt: str, output_schema: dict[str, Any] | None = None) -> str:
         executable = shutil.which(self.codex_executable) or self.codex_executable
@@ -308,11 +312,34 @@ class CodexSubscriptionChatModel(BaseChatModel):
             return output_path.read_text(encoding="utf-8").strip()
 
 
+def resolve_codex_executable() -> str:
+    """CODEX_CLI_PATH, then ``codex`` on PATH, then the newest Codex desktop-app binary.
+
+    The Codex app installs its CLI under a versioned folder that is not added
+    to PATH, so shells outside the app would otherwise fail to find it.
+    """
+    explicit = os.environ.get("CODEX_CLI_PATH")
+    if explicit:
+        return explicit
+    on_path = shutil.which("codex")
+    if on_path:
+        return on_path
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        installed = sorted(
+            Path(local_app_data).glob("OpenAI/Codex/bin/*/codex.exe"),
+            key=lambda path: path.stat().st_mtime,
+        )
+        if installed:
+            return str(installed[-1])
+    return "codex"
+
+
 class CodexSubscriptionClient(BaseLLMClient):
     """Factory wrapper for the subscription-authenticated Codex CLI model."""
 
     def get_llm(self) -> CodexSubscriptionChatModel:
-        executable = os.environ.get("CODEX_CLI_PATH", "codex")
+        executable = resolve_codex_executable()
         timeout = float(os.environ.get("CODEX_CLI_TIMEOUT", self.kwargs.get("timeout", 600)))
         callbacks = self.kwargs.get("callbacks")
         return CodexSubscriptionChatModel(

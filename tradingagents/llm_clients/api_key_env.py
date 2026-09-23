@@ -20,6 +20,8 @@ PROVIDER_API_KEY_ENV: dict[str, str | None] = {
     "bedrock":    None,
     # Uses the Codex CLI's cached ChatGPT OAuth session, not an API key.
     "codex_subscription": None,
+    # Uses the Claude Code CLI's claude.ai subscription login, not an API key.
+    "claude_subscription": None,
     "xai":        "XAI_API_KEY",
     "deepseek":   "DEEPSEEK_API_KEY",
     # Dual-region providers each carry their own account; keys are not

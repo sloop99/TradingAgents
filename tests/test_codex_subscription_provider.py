@@ -119,3 +119,42 @@ def test_structured_output_returns_pydantic_model(monkeypatch):
     assert captured["schema"]["properties"]["rating"] == {
         "$ref": "#/$defs/_Rating"
     }
+
+
+def test_graph_forwards_reasoning_effort_to_codex_subscription():
+    from types import SimpleNamespace
+
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    config = {"llm_provider": "codex_subscription", "openai_reasoning_effort": "xhigh"}
+    kwargs = TradingAgentsGraph._get_provider_kwargs(SimpleNamespace(config=config))
+    assert kwargs["reasoning_effort"] == "xhigh"
+
+
+def test_reasoning_effort_reaches_the_codex_command(monkeypatch):
+    captured = _fake_codex(monkeypatch, "ok")
+    CodexSubscriptionChatModel(codex_executable="codex-test", reasoning_effort="xhigh").invoke("hi")
+    command = captured["command"]
+    assert command[command.index("--config") + 1] == 'model_reasoning_effort="xhigh"'
+
+
+def test_client_finds_the_codex_app_binary_when_codex_is_not_on_path(tmp_path, monkeypatch):
+    import os
+
+    import tradingagents.llm_clients.codex_subscription_client as module
+
+    older = tmp_path / "OpenAI" / "Codex" / "bin" / "aaa" / "codex.exe"
+    newer = tmp_path / "OpenAI" / "Codex" / "bin" / "bbb" / "codex.exe"
+    for path in (older, newer):
+        path.parent.mkdir(parents=True)
+        path.write_text("")
+    os.utime(older, (1_000_000, 1_000_000))
+    monkeypatch.delenv("CODEX_CLI_PATH", raising=False)
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path))
+    monkeypatch.setattr(module.shutil, "which", lambda _name: None)
+    assert CodexSubscriptionClient("gpt-6-astra").get_llm().codex_executable == str(newer)
+
+
+def test_explicit_codex_path_wins_over_discovery(tmp_path, monkeypatch):
+    monkeypatch.setenv("CODEX_CLI_PATH", str(tmp_path / "custom-codex.exe"))
+    assert CodexSubscriptionClient("default").get_llm().codex_executable == str(tmp_path / "custom-codex.exe")
