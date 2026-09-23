@@ -1,13 +1,51 @@
+import http.client
 import json
+import mimetypes
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from threading import Thread
 
-from tradingagents.dashboard.indexer import build_index, default_scan_roots
+import pytest
+
+from tradingagents.dashboard.indexer import build_index, default_scan_roots, normalize_rating
+from tradingagents.dashboard.server import DashboardState, handler_factory
 
 
 def _write(path: Path, text: str) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def _rated_run(root: Path, ticker: str, date: str, decision: str, *, completed: str = "", context: str = "",
+               summary: str = "", stamp: str = "full") -> Path:
+    run = root / "runs" / f"{ticker}_{date}_{stamp}"
+    _write(run / "report" / "complete_report.md", f"# Trading Analysis Report: {ticker}")
+    body = f"**Rating**: {decision}"
+    if summary:
+        body += f"\n\n**Executive Summary**: {summary}\n\n**Investment Thesis**: Not part of the summary."
+    _write(run / "report" / "5_portfolio" / "decision.md", body)
+    manifest = {"ticker": ticker, "analysis_date": date, "status": "completed", "final_rating": decision}
+    if completed:
+        manifest["completed_at"] = completed
+    if context:
+        manifest["decision_context"] = context
+    _write(run / "run_manifest.json", json.dumps(manifest))
+    return run
+
+
+def _evidence_run(root: Path, ticker: str, date: str, *, completed: str = "") -> Path:
+    run = root / "research" / ticker / date / f"evidence-{completed or 'x'}".replace(":", "")
+    _write(run / "research-brief.md", f"# {ticker} evidence brief")
+    manifest = {"ticker": ticker, "as_of": date, "status": "completed"}
+    if completed:
+        manifest["completed_at"] = completed
+    _write(run / "manifest.json", json.dumps(manifest))
+    return run
+
+
+def _summaries(root: Path) -> dict[str, dict]:
+    return {entry["ticker"]: entry for entry in build_index([root]).public_payload()["tickers"]}
 
 
 def test_indexes_legacy_and_evidence_aware_runs(tmp_path):
@@ -121,3 +159,161 @@ def test_last_recorded_position_cost_is_carried_forward_with_provenance(tmp_path
     assert latest.average_cost_usd == 172.33
     assert latest.average_cost_as_of == "2026-09-16"
     assert any("carried from" in warning for warning in latest.warnings)
+
+
+@pytest.mark.parametrize(
+    ("decision", "expected"),
+    [
+        ("Buy", "buy"), ("Strong Buy", "buy"), ("Overweight", "overweight"), ("HOLD", "hold"),
+        ("Neutral", "hold"), ("Underweight", "underweight"), ("Sell", "sell"), ("strong  sell", "sell"),
+        ("Evidence only", "evidence"), ("Unresolved", "unrated"), ("", "unrated"), (None, "unrated"),
+    ],
+)
+def test_normalize_rating_maps_decisions_onto_the_five_tier_scale(decision, expected):
+    assert normalize_rating(decision) == expected
+
+
+def test_ticker_summary_groups_by_the_row_runs_perspective(tmp_path):
+    _rated_run(tmp_path, "PANW", "2026-09-17", "Hold", context="Existing PANW holding")
+    _rated_run(tmp_path, "AMZN", "2026-09-01", "Overweight")
+    summaries = _summaries(tmp_path)
+    assert summaries["PANW"]["group"] == "holding"
+    assert summaries["AMZN"]["group"] == "watching"
+
+
+def test_ticker_summary_prefers_newest_rated_run_over_newer_evidence_only_run(tmp_path):
+    rated = _rated_run(tmp_path, "PANW", "2026-09-17", "Hold", completed="2026-09-17T10:00:00Z")
+    _evidence_run(tmp_path, "PANW", "2026-09-17", completed="2026-09-17T11:00:00Z")
+    index = build_index([tmp_path])
+    rated_id = next(run.id for run in index.runs if run.report_path.is_relative_to(rated.resolve()))
+    summary = index.public_payload()["tickers"][0]
+    assert summary["row_run_id"] == rated_id
+    assert summary["rating"] == "hold"
+    assert summary["decision"] == "Hold"
+
+
+def test_ticker_with_only_evidence_runs_has_no_rating_change(tmp_path):
+    _evidence_run(tmp_path, "CAT", "2026-09-16", completed="2026-09-16T09:00:00Z")
+    summary = _summaries(tmp_path)["CAT"]
+    assert summary["rating"] == "evidence"
+    assert summary["decision"] == "Evidence only"
+    assert summary["change"] == "none"
+    assert summary["previous"] is None
+
+
+def test_rating_change_compares_against_the_previous_rated_run(tmp_path):
+    _rated_run(tmp_path, "OUST", "2026-09-03", "Hold")
+    _rated_run(tmp_path, "OUST", "2026-09-08", "Sell")
+    _rated_run(tmp_path, "LUNR", "2026-08-01", "Underweight")
+    _rated_run(tmp_path, "LUNR", "2026-08-24", "Overweight")
+    _rated_run(tmp_path, "CRWD", "2026-09-16", "Hold")
+    _rated_run(tmp_path, "CRWD", "2026-09-17", "Hold")
+    _rated_run(tmp_path, "AMZN", "2026-09-01", "Overweight")
+    summaries = _summaries(tmp_path)
+    assert summaries["OUST"]["change"] == "down"
+    assert summaries["OUST"]["previous"]["decision"] == "Hold"
+    assert summaries["OUST"]["previous"]["rating"] == "hold"
+    assert summaries["OUST"]["previous"]["analysis_date"] == "2026-09-03"
+    assert summaries["LUNR"]["change"] == "up"
+    assert summaries["CRWD"]["change"] == "unchanged"
+    assert summaries["AMZN"]["change"] == "first"
+    assert summaries["AMZN"]["previous"] is None
+
+
+def test_unrated_runs_are_skipped_when_comparing_ratings(tmp_path):
+    _rated_run(tmp_path, "MU", "2026-08-01", "Hold")
+    _rated_run(tmp_path, "MU", "2026-08-10", "Unresolved")
+    _rated_run(tmp_path, "MU", "2026-08-18", "Buy")
+    summary = _summaries(tmp_path)["MU"]
+    assert summary["decision"] == "Buy"
+    assert summary["change"] == "up"
+    assert summary["previous"]["analysis_date"] == "2026-08-01"
+
+
+def test_ticker_summaries_exclude_smoke_and_incomplete_runs(tmp_path):
+    _write(tmp_path / "codex_smoke" / "AAPL_2026-08-15" / "complete_report.md", "# Trading Analysis Report: AAPL")
+    failed = _rated_run(tmp_path, "BRO", "2026-08-24", "Underweight")
+    manifest = json.loads((failed / "run_manifest.json").read_text(encoding="utf-8"))
+    manifest["status"] = "failed"
+    _write(failed / "run_manifest.json", json.dumps(manifest))
+    assert _summaries(tmp_path) == {}
+
+
+def test_ticker_history_is_oldest_first_and_flags_evidence_only_runs(tmp_path):
+    _rated_run(tmp_path, "FTNT", "2026-09-16", "Hold", completed="2026-09-16T10:00:00Z")
+    _evidence_run(tmp_path, "FTNT", "2026-09-17", completed="2026-09-17T09:00:00Z")
+    _rated_run(tmp_path, "FTNT", "2026-09-17", "Hold", completed="2026-09-17T10:00:00Z", stamp="refresh")
+    history = _summaries(tmp_path)["FTNT"]["history"]
+    assert [(entry["analysis_date"], entry["evidence_only"]) for entry in history] == [
+        ("2026-09-16", False), ("2026-09-17", True), ("2026-09-17", False),
+    ]
+    assert [entry["rating"] for entry in history] == ["hold", "evidence", "hold"]
+    assert all(entry["run_id"] for entry in history)
+
+
+def test_same_day_evidence_packet_precedes_the_rated_run_when_untimed(tmp_path):
+    _rated_run(tmp_path, "PANW", "2026-09-17", "Hold")
+    _evidence_run(tmp_path, "PANW", "2026-09-17")
+    history = _summaries(tmp_path)["PANW"]["history"]
+    assert [entry["evidence_only"] for entry in history] == [True, False]
+
+
+def test_executive_summary_is_extracted_from_the_final_decision(tmp_path):
+    _rated_run(tmp_path, "PANW", "2026-09-17", "Hold", summary="Maintain the position.\nReassess   quarterly.")
+    run = build_index([tmp_path]).public_payload()["runs"][0]
+    assert run["executive_summary"] == "Maintain the position. Reassess quarterly."
+    assert run["rating"] == "hold"
+
+
+def test_long_executive_summary_is_truncated_with_an_ellipsis(tmp_path):
+    _rated_run(tmp_path, "PANW", "2026-09-17", "Hold", summary="word " * 200)
+    summary = build_index([tmp_path]).public_payload()["runs"][0]["executive_summary"]
+    assert len(summary) == 400
+    assert summary.endswith("…")
+
+
+def test_executive_summary_is_none_without_one(tmp_path):
+    _rated_run(tmp_path, "AMZN", "2026-09-01", "Overweight")
+    assert build_index([tmp_path]).public_payload()["runs"][0]["executive_summary"] is None
+
+
+@pytest.fixture
+def dashboard_server(tmp_path):
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler_factory(DashboardState([tmp_path])))
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        yield server.server_port
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=3)
+
+
+def _get(port: int, path: str) -> tuple[int, str]:
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+    try:
+        connection.request("GET", path)
+        response = connection.getresponse()
+        response.read()
+        return response.status, response.getheader("Content-Type", "")
+    finally:
+        connection.close()
+
+
+def test_scripts_are_served_as_javascript_even_when_the_registry_says_text_plain(dashboard_server, monkeypatch):
+    monkeypatch.setattr(mimetypes, "guess_type", lambda *_args, **_kwargs: ("text/plain", None))
+    status, content_type = _get(dashboard_server, "/app.js")
+    assert status == 200
+    assert content_type.startswith("text/javascript")
+
+
+def test_nested_static_modules_are_served(dashboard_server):
+    status, content_type = _get(dashboard_server, "/views/positions.js")
+    assert status == 200
+    assert content_type.startswith("text/javascript")
+
+
+def test_static_paths_cannot_escape_the_static_folder(dashboard_server):
+    status, _ = _get(dashboard_server, "/../server.py")
+    assert status == 404

@@ -1,345 +1,284 @@
-"use strict";
+// Research Ledger shell: hash routing, data loading, keyboard, theme, search, footer.
 
-const state = { payload: null, selectedTicker: "ALL", activeRun: null, activeSection: null };
+import { getRuns, getSectors, refreshRuns } from "./api.js";
+import { el, isCostCarried } from "./format.js";
+import { renderMarket } from "./views/market.js";
+import { renderPositions } from "./views/positions.js";
+import { renderReport } from "./views/report.js";
+
 const $ = (selector) => document.querySelector(selector);
 
-document.addEventListener("DOMContentLoaded", async () => {
-  bindControls();
-  ResearchFeatures.loadSectors();
-  await loadRuns();
-});
+const state = {
+  data: null,
+  runsById: new Map(),
+  runsError: null,
+  refreshError: null,
+  sectors: null,
+  sectorsError: null,
+  query: "",
+  showTests: false,
+  selectedKey: null,
+  marketFocus: null,
+};
 
-function bindControls() {
-  ["#search", "#latest-only", "#show-smoke", "#show-cost"].forEach((selector) => {
-    $(selector).addEventListener("input", render);
+let controller = {};
+let currentRoute = null;
+let renderSerial = 0;
+
+const KEY_HINTS = {
+  positions: "↑↓ move · enter open · / search",
+  report: "[ ] older/newer run · esc back",
+  market: "/ search",
+};
+
+// ---------- routing ----------
+
+const isRouteHash = (hash) => !hash || hash === "#" || hash.startsWith("#/");
+
+function parseRoute(hash) {
+  const parts = hash.replace(/^#\/?/, "").split("/").filter(Boolean).map((part) => {
+    try { return decodeURIComponent(part); } catch { return part; }
   });
-  $("#refresh").addEventListener("click", refreshRuns);
-  $("#dialog-close").addEventListener("click", () => $("#report-dialog").close());
-  $("#report-dialog").addEventListener("click", (event) => {
-    if (event.target === $("#report-dialog")) $("#report-dialog").close();
-  });
+  if (parts[0] === "run" && parts[1]) return { name: "report", runId: parts[1], section: parts[2] || null };
+  if (parts[0] === "market") return { name: "market" };
+  return { name: "positions" };
 }
 
-async function loadRuns() {
-  try {
-    const response = await fetch("/api/runs", { cache: "no-store" });
-    if (!response.ok) throw new Error(`Index request failed (${response.status})`);
-    state.payload = await response.json();
-    render();
-  } catch (error) {
-    showToast(error.message);
-  }
+function navigate(hash) {
+  if (window.location.hash === hash) render({ force: true });
+  else window.location.hash = hash;
 }
 
-async function refreshRuns() {
-  const button = $("#refresh");
-  button.disabled = true;
-  button.textContent = "Refreshing…";
-  try {
-    const response = await fetch("/api/refresh", { method: "POST" });
-    if (!response.ok) throw new Error(`Refresh failed (${response.status})`);
-    state.payload = await response.json();
-    render();
-    ResearchFeatures.loadSectors();
-    showToast("Research archive refreshed");
-  } catch (error) {
-    showToast(error.message);
-  } finally {
-    button.disabled = false;
-    button.textContent = "Refresh runs";
-  }
-}
-
-function render() {
-  if (!state.payload) return;
-  const showSmoke = $("#show-smoke").checked;
-  const archiveRuns = state.payload.runs.filter((run) => showSmoke || !run.is_smoke);
-  const tickers = groupTickers(archiveRuns);
-  if (state.selectedTicker !== "ALL" && !tickers.has(state.selectedTicker)) state.selectedTicker = "ALL";
-  renderSummary(archiveRuns);
-  renderTickerNav(tickers, archiveRuns.length);
-  renderTape(archiveRuns);
-  renderCards(filteredRuns(archiveRuns));
-}
-
-function groupTickers(runs) {
-  const result = new Map();
-  runs.forEach((run) => result.set(run.ticker, (result.get(run.ticker) || 0) + 1));
-  return new Map([...result].sort((a, b) => a[0].localeCompare(b[0])));
-}
-
-function renderSummary(runs) {
-  $("#summary-runs").textContent = runs.length;
-  $("#summary-tickers").textContent = new Set(runs.map((run) => run.ticker)).size;
-  const latest = runs.map((run) => run.analysis_date).filter((value) => value !== "unknown").sort().at(-1);
-  $("#summary-date").textContent = latest ? formatDate(latest, { month: "short", day: "numeric" }) : "—";
-}
-
-function renderTickerNav(tickers, total) {
-  const nav = $("#ticker-nav");
-  nav.replaceChildren();
-  nav.append(tickerButton("ALL", total, "All companies"));
-  tickers.forEach((count, ticker) => nav.append(tickerButton(ticker, count, ticker)));
-}
-
-function tickerButton(value, count, label) {
-  const button = el("button", "ticker-button");
-  button.type = "button";
-  button.classList.toggle("active", state.selectedTicker === value);
-  button.setAttribute("aria-pressed", String(state.selectedTicker === value));
-  button.append(el("span", "", label), el("span", "", String(count)));
-  button.addEventListener("click", () => { state.selectedTicker = value; render(); });
-  return button;
-}
-
-function filteredRuns(runs) {
-  const query = $("#search").value.trim().toLowerCase();
-  const latestOnly = $("#latest-only").checked;
-  const showPositionData = $("#show-cost").checked;
-  return runs.filter((run) => {
-    if (state.selectedTicker !== "ALL" && run.ticker !== state.selectedTicker) return false;
-    if (latestOnly && !run.is_latest) return false;
-    if (!query) return true;
-    const searchableThesis = showPositionData || !isPositionRun(run) ? run.thesis : "";
-    return [run.ticker, run.decision, searchableThesis, run.perspective, run.analysis_date]
-      .some((value) => String(value || "").toLowerCase().includes(query));
-  });
-}
-
-function isPositionRun(run) {
-  return run.perspective === "Existing holder" || run.average_cost_usd != null;
-}
-
-function renderTape(runs) {
-  const tape = $("#research-tape");
-  tape.replaceChildren();
-  const candidates = state.selectedTicker === "ALL"
-    ? runs.filter((run) => run.is_latest).slice().sort((a, b) => a.analysis_date.localeCompare(b.analysis_date))
-    : runs.filter((run) => run.ticker === state.selectedTicker).slice().sort((a, b) => a.analysis_date.localeCompare(b.analysis_date));
-  $("#tape-caption").textContent = state.selectedTicker === "ALL"
-    ? "Most recent run for each company"
-    : `${candidates.length} dated run${candidates.length === 1 ? "" : "s"} for ${state.selectedTicker}`;
-  candidates.forEach((run) => {
-    const item = el("div", "tape-run");
-    item.dataset.evidence = run.evidence_status;
-    item.setAttribute("role", "listitem");
-    item.append(
-      el("time", "", formatDate(run.analysis_date, { month: "short", day: "numeric", year: "numeric" })),
-      el("strong", "", state.selectedTicker === "ALL" ? `${run.ticker} · ${run.decision}` : run.decision),
-      el("small", "", evidenceLabel(run.evidence_status)),
-    );
-    tape.append(item);
-  });
-}
-
-function renderCards(runs) {
-  const list = $("#run-list");
-  list.replaceChildren();
-  $("#result-count").textContent = `${runs.length} run${runs.length === 1 ? "" : "s"}`;
-  $("#empty").hidden = runs.length > 0;
-  runs.forEach((run, index) => list.append(runCard(run, index)));
-}
-
-function runCard(run, index) {
-  const card = el("button", "run-card");
-  card.type = "button";
-  card.dataset.evidence = run.evidence_status;
-  card.style.animationDelay = `${Math.min(index * 35, 250)}ms`;
-  card.setAttribute("aria-label", `Open ${run.ticker} ${run.analysis_date} report`);
-
-  const top = el("div", "card-top");
-  const lockup = el("div", "ticker-lockup");
-  lockup.append(el("span", "ticker-symbol", run.ticker));
-  if (run.is_latest) lockup.append(el("span", "latest-chip", "Latest"));
-  top.append(lockup, el("time", "card-date", formatDate(run.analysis_date, { month: "short", day: "numeric", year: "numeric" })));
-  const context = isPositionRun(run) && !$("#show-cost").checked
-    ? "Position context hidden. Turn on Show position data to view this summary."
-    : run.decision_interpretation || run.thesis || "Open the report for the full research context.";
-  card.append(top, el("div", "card-decision", run.decision), el("div", "card-context", truncate(context, 150)));
-
-  const meta = el("div", "card-meta");
-  meta.append(badge(run.perspective), badge(`Evidence: ${evidenceLabel(run.evidence_status)}`, evidenceClass(run.evidence_status)));
-  meta.append(badge(`Valuation: ${capitalize(run.valuation_status)}`, run.valuation_status === "unsupported" ? "warning" : ""));
-  if (run.is_smoke) meta.append(badge("Test run", "warning"));
-  if (run.analyst_consensus?.cohorts?.length) meta.append(badge("Analyst expectations"));
-  card.append(meta);
-  if ($("#show-cost").checked && run.average_cost_usd != null) {
-    const costDate = run.average_cost_as_of && run.average_cost_as_of !== run.analysis_date
-      ? `Last recorded ${formatDate(run.average_cost_as_of, { month: "short", day: "numeric", year: "numeric" })}`
-      : "Recorded average cost";
-    card.append(el("div", "cost-line", `${costDate} · $${run.average_cost_usd.toFixed(2)} per share`));
-  }
-  card.addEventListener("click", () => openReport(run));
-  return card;
-}
-
-function badge(text, modifier = "") {
-  return el("span", `badge ${modifier}`.trim(), text);
-}
-
-async function openReport(run) {
-  state.activeRun = run;
-  const { sections } = analystTabPolicy(run);
-  const preferred = sections.includes("Final decision") ? "Final decision" : sections[0] || "analyst-expectations";
-  $("#dialog-eyebrow").textContent = `${run.ticker} · ${formatDate(run.analysis_date, { month: "long", day: "numeric", year: "numeric" })}`;
-  $("#dialog-title").textContent = `${run.decision} · ${run.perspective}`;
-  renderTabs(run, preferred);
-  $("#report-dialog").showModal();
-  if (preferred === "analyst-expectations") {
-    state.activeSection = preferred;
-    ResearchFeatures.renderAnalyst(run, $("#report-content"));
-  } else {
-    await loadSection(run, preferred);
-  }
-}
-
-function analystTabPolicy(run) {
-  const hasStructured = Boolean(run.analyst_consensus || run.vendor_analyst_targets?.length);
-  const hasRaw = run.sections.some((section) => section.trim().toLowerCase() === "analyst expectations");
+function context() {
+  const serial = renderSerial;
   return {
-    showStructured: hasStructured || !hasRaw,
-    sections: hasStructured
-      ? run.sections.filter((section) => section.trim().toLowerCase() !== "analyst expectations")
-      : run.sections,
+    data: state.data,
+    runsById: state.runsById,
+    runsError: state.runsError,
+    sectors: state.sectors,
+    sectorsError: state.sectorsError,
+    query: state.query,
+    showTests: state.showTests,
+    selectedKey: state.selectedKey,
+    marketFocus: state.marketFocus,
+    isCurrent: () => serial === renderSerial,
+    navigate,
+    retry: loadRuns,
+    retrySectors: loadSectors,
+    setSelected: (key) => { state.selectedKey = key; },
+    setMarketFocus: (symbol) => { state.marketFocus = symbol; },
   };
 }
 
-function renderTabs(run, selected) {
-  const tabs = $("#section-tabs");
-  tabs.replaceChildren();
-  const { showStructured, sections } = analystTabPolicy(run);
-  if (showStructured) {
-    ResearchFeatures.appendAnalystTab(tabs, run, (button) => {
-      state.activeSection = "analyst-expectations";
-      tabs.querySelectorAll(".tab").forEach((node) => node.classList.remove("active"));
-      button.classList.add("active");
-      ResearchFeatures.renderAnalyst(run, $("#report-content"));
-    });
-    tabs.lastElementChild.classList.toggle("active", selected === "analyst-expectations");
+function render({ force = false, focusView = false } = {}) {
+  const route = isRouteHash(window.location.hash) ? parseRoute(window.location.hash) : currentRoute || parseRoute("");
+  if (!force && controller.handles?.(route)) {
+    controller.update(route);
+    currentRoute = route;
+    updateChrome(route);
+    return;
   }
-  sections.forEach((section) => {
-    const button = el("button", "tab", section);
-    button.type = "button";
-    button.classList.toggle("active", section === selected);
-    button.addEventListener("click", async () => {
-      tabs.querySelectorAll(".tab").forEach((node) => node.classList.remove("active"));
-      button.classList.add("active");
-      await loadSection(run, section);
-    });
-    tabs.append(button);
-  });
+  const pageChanged = !currentRoute || currentRoute.name !== route.name || currentRoute.runId !== route.runId;
+  controller.destroy?.();
+  renderSerial += 1;
+  const view = $("#view");
+  const ctx = context();
+  if (route.name === "report") controller = renderReport(view, ctx, route) || {};
+  else if (route.name === "market") controller = renderMarket(view, ctx) || {};
+  else controller = renderPositions(view, ctx) || {};
+  if (state.refreshError) view.prepend(refreshBanner(state.refreshError));
+  currentRoute = route;
+  updateChrome(route);
+  if (pageChanged) {
+    window.scrollTo(0, 0);
+    if (focusView) view.focus({ preventScroll: true });
+  }
 }
 
-async function loadSection(run, section) {
-  state.activeSection = section;
-  const content = $("#report-content");
-  content.replaceChildren(el("p", "report-loading", "Loading report…"));
+function refreshBanner(error) {
+  const banner = el("p", "banner bad", `${error.message} Showing the previously loaded archive.`);
+  const retry = el("button", "btn", "Retry");
+  retry.type = "button";
+  retry.addEventListener("click", refresh);
+  banner.append(retry);
+  const wrap = el("div", "view-pad");
+  wrap.append(banner);
+  return wrap;
+}
+
+// ---------- data ----------
+
+function setData(payload) {
+  state.data = payload;
+  state.runsById = new Map(payload.runs.map((run) => [run.id, run]));
+}
+
+async function loadRuns() {
+  state.runsError = null;
+  if (!state.data) render({ force: true });
   try {
-    const url = `/api/report?id=${encodeURIComponent(run.id)}&section=${encodeURIComponent(section)}`;
-    const response = await fetch(url, { cache: "no-store" });
-    if (!response.ok) throw new Error(`Report request failed (${response.status})`);
-    const payload = await response.json();
-    if (state.activeRun !== run || state.activeSection !== section) return;
-    content.replaceChildren(renderMarkdown(payload.markdown));
-    content.scrollTop = 0;
+    setData(await getRuns());
   } catch (error) {
-    if (state.activeRun !== run || state.activeSection !== section) return;
-    content.replaceChildren(el("p", "report-loading", error.message));
+    state.runsError = error;
+  }
+  render({ force: true });
+}
+
+async function loadSectors() {
+  state.sectorsError = null;
+  try {
+    state.sectors = await getSectors();
+  } catch (error) {
+    state.sectorsError = error;
+  }
+  if (currentRoute?.name !== "report") render({ force: true });
+}
+
+async function refresh() {
+  const button = $("#refresh");
+  button.disabled = true;
+  button.querySelector(".label").textContent = "Refreshing…";
+  try {
+    setData(await refreshRuns());
+    state.refreshError = null;
+    state.runsError = null;
+    loadSectors();
+    render({ force: true });
+    toast(`Archive refreshed · ${state.data.summary.runs} runs`);
+  } catch (error) {
+    state.refreshError = error;
+    render({ force: true });
+  } finally {
+    button.disabled = false;
+    button.querySelector(".label").textContent = "Refresh";
   }
 }
 
-function renderMarkdown(markdown) {
-  const root = document.createElement("div");
-  const lines = markdown.replace(/\r/g, "").split("\n");
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (!line.trim()) { index += 1; continue; }
-    const heading = line.match(/^(#{1,3})\s+(.+)$/);
-    if (heading) {
-      const node = document.createElement(`h${heading[1].length}`);
-      appendInline(node, heading[2]);
-      root.append(node); index += 1; continue;
-    }
-    if (/^\|.*\|\s*$/.test(line) && index + 1 < lines.length && /^\|?\s*:?-+/.test(lines[index + 1])) {
-      const block = [];
-      while (index < lines.length && /^\|.*\|\s*$/.test(lines[index])) block.push(lines[index++]);
-      root.append(renderTable(block)); continue;
-    }
-    if (/^[-*]\s+/.test(line)) {
-      const list = document.createElement("ul");
-      while (index < lines.length && /^[-*]\s+/.test(lines[index])) {
-        const item = document.createElement("li"); appendInline(item, lines[index].replace(/^[-*]\s+/, "")); list.append(item); index += 1;
-      }
-      root.append(list); continue;
-    }
-    if (/^\d+\.\s+/.test(line)) {
-      const list = document.createElement("ol");
-      while (index < lines.length && /^\d+\.\s+/.test(lines[index])) {
-        const item = document.createElement("li"); appendInline(item, lines[index].replace(/^\d+\.\s+/, "")); list.append(item); index += 1;
-      }
-      root.append(list); continue;
-    }
-    const paragraph = document.createElement("p");
-    const chunk = [line.trim()]; index += 1;
-    while (index < lines.length && lines[index].trim() && !/^(#{1,3})\s|^[-*]\s+|^\d+\.\s+|^\|.*\|\s*$/.test(lines[index])) chunk.push(lines[index++].trim());
-    appendInline(paragraph, chunk.join(" "));
-    root.append(paragraph);
-  }
-  return root;
-}
+// ---------- chrome: nav, footer, title ----------
 
-function renderTable(lines) {
-  const table = document.createElement("table");
-  const rows = lines.filter((_, index) => index !== 1).map((line) => line.replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()));
-  rows.forEach((cells, rowIndex) => {
-    const row = document.createElement("tr");
-    cells.forEach((cell) => { const node = document.createElement(rowIndex === 0 ? "th" : "td"); appendInline(node, cell); row.append(node); });
-    (rowIndex === 0 ? (table.tHead || table.createTHead()) : (table.tBodies[0] || table.createTBody())).append(row);
+function updateChrome(route) {
+  document.querySelectorAll("[data-nav]").forEach((anchor) => {
+    const active = anchor.dataset.nav === (route.name === "market" ? "market" : "positions");
+    if (active) anchor.setAttribute("aria-current", "page");
+    else anchor.removeAttribute("aria-current");
   });
-  return table;
+  document.title = route.name === "market" ? "Market · Research Ledger"
+    : route.name === "report" && controller.title ? `${controller.title} · Research Ledger`
+      : "Research Ledger";
+  $("#footer-keys").textContent = KEY_HINTS[route.name];
+  updateFooter();
 }
 
-function appendInline(parent, text) {
-  const pattern = /(\*\*[^*]+\*\*|`[^`]+`|\[[^\]]+\]\([^)]+\))/g;
-  let cursor = 0;
-  for (const match of text.matchAll(pattern)) {
-    parent.append(document.createTextNode(text.slice(cursor, match.index)));
-    const token = match[0];
-    if (token.startsWith("**")) parent.append(el("strong", "", token.slice(2, -2)));
-    else if (token.startsWith("`")) parent.append(el("code", "", token.slice(1, -1)));
-    else {
-      const link = token.match(/^\[([^\]]+)\]\(([^)]+)\)$/);
-      const node = el("a", "", link[1]);
-      if (/^https?:\/\//i.test(link[2])) { node.href = link[2]; node.target = "_blank"; node.rel = "noreferrer"; }
-      else { node.href = "#"; node.title = "Local source path retained in report"; }
-      parent.append(node);
-    }
-    cursor = match.index + token.length;
+function updateFooter() {
+  const data = state.data;
+  const counts = $("#footer-counts");
+  if (!data) {
+    counts.textContent = state.runsError ? "ARCHIVE UNAVAILABLE" : "LOADING…";
+    return;
   }
-  parent.append(document.createTextNode(text.slice(cursor)));
+  const indexed = new Date(data.generated_at);
+  const time = Number.isNaN(indexed.valueOf()) ? "" : ` · INDEXED ${indexed.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
+  counts.textContent = `${data.summary.runs} RUNS · ${data.summary.tickers} TICKERS${time}`;
+
+  const carried = (data.tickers || []).some((summary) => {
+    const run = state.runsById.get(summary.row_run_id);
+    return summary.group === "holding" && run?.average_cost_usd != null && isCostCarried(run);
+  });
+  $("#footer-carried").hidden = !(carried && currentRoute?.name === "positions");
+
+  const warnings = Array.isArray(data.warnings) ? data.warnings : [];
+  const details = $("#footer-warnings");
+  details.hidden = !warnings.length;
+  if (warnings.length) {
+    details.querySelector("summary").textContent = `${warnings.length} index warning${warnings.length === 1 ? "" : "s"}`;
+    details.querySelector("ul").replaceChildren(...warnings.map((warning) => el("li", "", warning)));
+  }
 }
 
-function el(tag, className = "", text = null) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text != null) node.textContent = text;
-  return node;
+let toastTimer = 0;
+function toast(message) {
+  const node = $("#status");
+  node.textContent = message;
+  node.classList.add("show");
+  window.clearTimeout(toastTimer);
+  toastTimer = window.setTimeout(() => node.classList.remove("show"), 2600);
 }
 
-function evidenceLabel(value) {
-  const labels = { material_conflict: "Material conflict", sufficient: "Sufficient", partial: "Partial", unsupported: "Unsupported", legacy: "Legacy" };
-  return labels[value] || capitalize(value || "Unknown");
+// ---------- theme ----------
+
+const darkQuery = window.matchMedia("(prefers-color-scheme: dark)");
+const effectiveTheme = () => document.documentElement.dataset.theme || (darkQuery.matches ? "dark" : "light");
+
+function syncThemeButton() {
+  const next = effectiveTheme() === "dark" ? "light" : "dark";
+  const button = $("#theme-toggle");
+  button.setAttribute("aria-label", `Switch to ${next} theme`);
+  button.title = `Switch to ${next} theme`;
 }
-function evidenceClass(value) { return value === "material_conflict" ? "conflict" : (["partial", "unsupported"].includes(value) ? "warning" : ""); }
-function capitalize(value) { return String(value || "unknown").replaceAll("_", " ").replace(/^./, (letter) => letter.toUpperCase()); }
-function truncate(value, length) { return value.length > length ? `${value.slice(0, length - 1).trim()}…` : value; }
-function formatDate(value, options) {
-  if (!value || value === "unknown") return "Unknown date";
-  const parsed = new Date(`${value.slice(0, 10)}T12:00:00Z`);
-  return Number.isNaN(parsed.valueOf()) ? value : new Intl.DateTimeFormat("en-US", { ...options, timeZone: "UTC" }).format(parsed);
+
+function toggleTheme() {
+  const next = effectiveTheme() === "dark" ? "light" : "dark";
+  document.documentElement.dataset.theme = next;
+  try { localStorage.setItem("ledger-theme", next); } catch { /* Not persisted; still applies now. */ }
+  syncThemeButton();
 }
-function showToast(message) {
-  const toast = $("#toast"); toast.textContent = message; toast.classList.add("show");
-  window.setTimeout(() => toast.classList.remove("show"), 2600);
+
+// ---------- input ----------
+
+function onKeyDown(event) {
+  if (event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+  const search = $("#search");
+  const target = event.target instanceof Element ? event.target : null;
+  if (target?.closest("input, textarea, select, [contenteditable='true']")) {
+    if (event.key === "Escape" && target === search) {
+      event.preventDefault();
+      if (search.value) {
+        search.value = "";
+        state.query = "";
+        render({ force: true });
+      } else {
+        search.blur();
+      }
+    }
+    return;
+  }
+  if (event.key === "/") {
+    event.preventDefault();
+    if (currentRoute?.name !== "positions") window.location.hash = "#/";
+    search.focus();
+    search.select();
+    return;
+  }
+  if ((event.key === "Enter" || event.key === " ") && target?.closest("a, button, summary")) return;
+  if (controller.onKey?.(event)) event.preventDefault();
 }
+
+function onSearch(event) {
+  state.query = event.target.value;
+  state.selectedKey = null;
+  if (currentRoute?.name !== "positions") window.location.hash = "#/";
+  else render({ force: true });
+}
+
+// ---------- boot ----------
+
+function boot() {
+  $("#search").addEventListener("input", onSearch);
+  $("#refresh").addEventListener("click", refresh);
+  $("#theme-toggle").addEventListener("click", toggleTheme);
+  $("#show-tests").addEventListener("change", (event) => {
+    state.showTests = event.target.checked;
+    render({ force: true });
+  });
+  darkQuery.addEventListener("change", syncThemeButton);
+  document.addEventListener("keydown", onKeyDown);
+  window.addEventListener("hashchange", () => {
+    if (!isRouteHash(window.location.hash)) return;
+    render({ focusView: document.activeElement !== $("#search") });
+  });
+  syncThemeButton();
+  loadRuns();
+  loadSectors();
+}
+
+boot();

@@ -14,6 +14,16 @@ from urllib.parse import parse_qs, urlparse
 from .indexer import ResearchIndex, build_index
 from .sectors import load_sector_snapshot
 
+# Pinned rather than taken from mimetypes: on Windows that reads the registry,
+# where a remapped .js (e.g. text/plain) makes browsers refuse module scripts.
+_STATIC_TYPES = {
+    ".html": "text/html",
+    ".js": "text/javascript",
+    ".css": "text/css",
+    ".svg": "image/svg+xml",
+    ".json": "application/json",
+}
+
 
 class DashboardState:
     def __init__(self, roots: list[Path], sector_file: Path | None = None):
@@ -87,7 +97,11 @@ def handler_factory(state: DashboardState):
                 self.send_error(HTTPStatus.NOT_FOUND)
                 return
             payload = candidate.read_bytes()
-            mime = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
+            mime = (
+                _STATIC_TYPES.get(candidate.suffix.lower())
+                or mimetypes.guess_type(candidate.name)[0]
+                or "application/octet-stream"
+            )
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", f"{mime}; charset=utf-8" if mime.startswith("text/") else mime)
             self.send_header("Content-Length", str(len(payload)))

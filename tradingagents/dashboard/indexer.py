@@ -17,6 +17,23 @@ _PROPOSAL_RE = re.compile(
 )
 _DATE_RE = re.compile(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)")
 _TICKER_DATE_RE = re.compile(r"(?:^|[\\/])([A-Z][A-Z0-9.^=-]{0,14})_(20\d{2}-\d{2}-\d{2})")
+_EXECUTIVE_SUMMARY_RE = re.compile(
+    r"\*\*Executive Summary\*\*\s*:\s*(.+?)(?:\r?\n[ \t]*\r?\n|\Z)", re.IGNORECASE | re.DOTALL
+)
+_EXECUTIVE_SUMMARY_LIMIT = 400
+
+# The five-tier scale the portfolio manager rates on, weakest to strongest.
+RATING_SCALE = {"sell": 1, "underweight": 2, "hold": 3, "overweight": 4, "buy": 5}
+_RATING_ALIASES = {"strong buy": "buy", "strong sell": "sell", "neutral": "hold"}
+
+
+def normalize_rating(decision: str | None) -> str:
+    """Map a decision string to a RATING_SCALE key, "evidence", or "unrated"."""
+    value = " ".join(str(decision or "").lower().split())
+    if value == "evidence only":
+        return "evidence"
+    value = _RATING_ALIASES.get(value, value)
+    return value if value in RATING_SCALE else "unrated"
 
 
 @dataclass
@@ -49,6 +66,11 @@ class ResearchRun:
     analyst_consensus: dict[str, Any] | None = None
     vendor_analyst_targets: list[dict[str, Any]] = field(default_factory=list)
     is_evidence_only: bool = False
+    executive_summary: str | None = None
+
+    @property
+    def rating(self) -> str:
+        return normalize_rating(self.decision)
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +100,8 @@ class ResearchRun:
             "analyst_consensus": self.analyst_consensus,
             "vendor_analyst_targets": self.vendor_analyst_targets,
             "is_evidence_only": self.is_evidence_only,
+            "executive_summary": self.executive_summary,
+            "rating": self.rating,
         }
 
 
@@ -100,6 +124,7 @@ class ResearchIndex:
                 "latest_date": max((run.analysis_date for run in visible), default=None),
             },
             "runs": [run.to_public_dict() for run in self.runs],
+            "tickers": _ticker_summaries(self.runs),
             "warnings": self.warnings,
         }
 
@@ -191,6 +216,70 @@ def _carry_forward_position_costs(runs: list[ResearchRun]) -> None:
             continue
         run.average_cost_usd, run.average_cost_as_of = prior
         run.warnings.append(f"Position cost carried from the {prior[1]} research record.")
+
+
+def _ticker_summaries(runs: list[ResearchRun]) -> list[dict[str, Any]]:
+    """One entry per ticker: the run to show, how its rating moved, and its history.
+
+    Only completed, non-smoke runs count. Evidence-only and unrated runs stay in
+    the history but never become the shown run while a rated run exists, and are
+    skipped when working out whether the rating changed.
+    """
+    by_ticker: dict[str, list[ResearchRun]] = {}
+    eligible = (run for run in runs if not run.is_smoke and run.status == "completed")
+    # Untimed same-day ties: an evidence packet feeds the rated run, so it goes first.
+    chronological = sorted(
+        eligible, key=lambda item: (item.analysis_date, item.completed_at or "", not item.is_evidence_only)
+    )
+    for run in chronological:
+        by_ticker.setdefault(run.ticker, []).append(run)
+    summaries = []
+    for ticker, history in sorted(by_ticker.items()):
+        rated = [run for run in history if run.rating in RATING_SCALE]
+        row = rated[-1] if rated else history[-1]
+        previous = rated[-2] if len(rated) > 1 else None
+        if row.rating not in RATING_SCALE:
+            change = "none"
+        elif previous is None:
+            change = "first"
+        else:
+            delta = RATING_SCALE[row.rating] - RATING_SCALE[previous.rating]
+            change = "up" if delta > 0 else "down" if delta < 0 else "unchanged"
+        summaries.append({
+            "ticker": ticker,
+            "group": "holding" if row.perspective == "Existing holder" else "watching",
+            "row_run_id": row.id,
+            "rating": row.rating,
+            "decision": row.decision,
+            "change": change,
+            "previous": None if previous is None else {
+                "run_id": previous.id,
+                "decision": previous.decision,
+                "rating": previous.rating,
+                "analysis_date": previous.analysis_date,
+            },
+            "history": [
+                {
+                    "run_id": run.id,
+                    "analysis_date": run.analysis_date,
+                    "decision": run.decision,
+                    "rating": run.rating,
+                    "evidence_only": run.is_evidence_only,
+                }
+                for run in history
+            ],
+        })
+    return summaries
+
+
+def _executive_summary(decision_text: str) -> str | None:
+    match = _EXECUTIVE_SUMMARY_RE.search(decision_text)
+    summary = " ".join(match.group(1).split()) if match else ""
+    if not summary:
+        return None
+    if len(summary) <= _EXECUTIVE_SUMMARY_LIMIT:
+        return summary
+    return summary[: _EXECUTIVE_SUMMARY_LIMIT - 1].rstrip() + "…"
 
 
 def _parse_run(report: Path, source_root: Path) -> ResearchRun:
@@ -308,6 +397,7 @@ def _parse_run(report: Path, source_root: Path) -> ResearchRun:
         analyst_consensus=consensus,
         vendor_analyst_targets=vendor_targets,
         is_evidence_only=evidence_only,
+        executive_summary=_executive_summary(decision_text),
     )
 
 
