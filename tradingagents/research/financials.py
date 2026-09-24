@@ -103,7 +103,7 @@ def analyze_financials(
     ]
     derived = list(quarters)
     normalized = safe_facts + quarters
-    ttms = _derive_ttm(normalized, safe_facts, issues, business_model)
+    ttms = _derive_ttm(normalized, safe_facts, issues, business_model, vintages or facts)
     derived.extend(ttms)
 
     analytical_inputs = safe_facts + derived
@@ -298,11 +298,41 @@ def _explained_quarter_gap(
     return None
 
 
+def _restated_quarters_match(
+    window: list[EvidenceFact],
+    direct: list[EvidenceFact],
+    vintages: list[EvidenceFact],
+    allowance: float,
+) -> bool:
+    """Whether some combination of each quarter's filing editions sums to the stated annual figure."""
+    from itertools import product
+
+    options = []
+    for quarter in window:
+        editions = {
+            float(item.value)
+            for item in vintages
+            if _metric(item) == _metric(quarter)
+            and item.unit.casefold() == quarter.unit.casefold()
+            and item.period_start == quarter.period_start
+            and item.period_end == quarter.period_end
+        } | {float(quarter.value)}
+        options.append(sorted(editions))
+    if all(len(values) == 1 for values in options):
+        return False
+    annual = {float(fact.value) for fact in direct}
+    return any(
+        any(_same_number(sum(combo), value) or abs(sum(combo) - value) <= allowance for value in annual)
+        for combo in product(*options)
+    )
+
+
 def _derive_ttm(
     facts: list[EvidenceFact],
     reported: list[EvidenceFact],
     issues: list[ResearchIssue],
     business_model: BusinessModel,
+    vintages: list[EvidenceFact] | None = None,
 ) -> list[EvidenceFact]:
     quarters = [
         fact
@@ -370,12 +400,17 @@ def _derive_ttm(
                 unit = _rounding_unit({float(fact.value) for fact in [*window, *direct]})
                 # Each rounded input can be off by half a unit.
                 allowance = unit * (len(window) + 1) / 2
+                explanation = None
                 if unit and all(abs(float(fact.value) - value) <= allowance for fact in direct):
+                    explanation = f"rounding in the filings' reporting unit ({unit:,.0f})"
+                elif _restated_quarters_match(window, direct, vintages or [], allowance):
+                    explanation = "restated quarterly figures (a combination of filing editions matches)"
+                if explanation:
                     issues.append(
                         _issue(
                             "TTM_ANNUAL_RECONCILED",
                             f"Summed quarters and the stated annual {metric} for {start} to {end} differ only by "
-                            f"rounding in the filings' reporting unit ({unit:,.0f}); the stated annual figure is used.",
+                            f"{explanation}; the stated annual figure is used.",
                             IssueSeverity.INFO,
                             metric,
                         )

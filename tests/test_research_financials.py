@@ -435,3 +435,35 @@ def test_ttm_within_rounding_of_the_annual_figure_is_reconciled():
 
     assert not any(issue.code == "TTM_ANNUAL_CONFLICT" for issue in result.issues)
     assert any(issue.code == "TTM_ANNUAL_RECONCILED" for issue in result.issues)
+
+
+@pytest.mark.unit
+def test_ttm_gap_explained_by_a_restated_quarter_is_reconciled():
+    q1 = fact("a:q1", "net_income", -110_000_000, "2025-02-01", "2025-04-30", published="2025-06-01")
+    q2_restated = fact("c:q2", "net_income", -70_153_000, "2025-05-01", "2025-07-31", published="2026-06-01")
+    q2_original = fact("b:q2", "net_income", -77_675_000, "2025-05-01", "2025-07-31", published="2025-09-01")
+    q3 = fact("d:q3", "net_income", -33_997_000, "2025-08-01", "2025-10-31", published="2025-12-01")
+    q4 = fact("e:q4", "net_income", -25_000_000, "2025-11-01", "2026-01-31", published="2026-03-01")
+    annual = fact("e:fy", "net_income", -246_672_000, "2025-02-01", "2026-01-31", published="2026-03-01")
+    selected = [q1, q2_restated, q3, q4, annual]
+
+    result = analyze_financials(selected, BusinessModel.GENERAL, vintages=selected + [q2_original])
+
+    assert not any(issue.code == "TTM_ANNUAL_CONFLICT" for issue in result.issues)
+    reconciled = next(issue for issue in result.issues if issue.code == "TTM_ANNUAL_RECONCILED")
+    assert "restated" in reconciled.message
+
+
+@pytest.mark.unit
+def test_unexplained_ttm_gap_still_conflicts():
+    quarters = [
+        fact("a:q1", "net_income", -110_000_000, "2025-02-01", "2025-04-30"),
+        fact("c:q2", "net_income", -70_153_000, "2025-05-01", "2025-07-31"),
+        fact("d:q3", "net_income", -33_997_000, "2025-08-01", "2025-10-31"),
+        fact("e:q4", "net_income", -25_000_000, "2025-11-01", "2026-01-31"),
+    ]
+    annual = fact("e:fy", "net_income", -260_000_000, "2025-02-01", "2026-01-31")
+
+    result = analyze_financials(quarters + [annual], BusinessModel.GENERAL)
+
+    assert any(issue.code == "TTM_ANNUAL_CONFLICT" for issue in result.issues)
