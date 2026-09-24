@@ -173,7 +173,9 @@ const multiple = (value) => (finite(value) ? `${Number(value).toFixed(1)}×` : "
 export function headlineMultiple(run) {
   const estimate = run.estimated_valuation;
   if (!estimate?.multiples) return null;
-  const hit = MULTIPLES.find(([key]) => finite(estimate.multiples[key]));
+  // A near-breakeven P/E (hundreds or thousands of x) is not a useful headline.
+  const hit = MULTIPLES.find(([key]) => finite(estimate.multiples[key])
+    && !(key === "price_to_earnings" && Number(estimate.multiples[key]) > 150));
   return hit ? { label: hit[1], value: multiple(estimate.multiples[hit[0]]) } : null;
 }
 

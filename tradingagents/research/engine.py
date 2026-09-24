@@ -248,7 +248,7 @@ def build_packet(
     share_inventory = analyze_share_inventory(facts, filing_metadata, listing_summary, normalized_as_of)
     filing_review = analyze_filing_contexts(facts, filing_metadata, normalized_as_of)
     issues.extend(filing_review.issues)
-    financials = analyze_financials(reconciled.selected_facts, business_model)
+    financials = analyze_financials(reconciled.selected_facts, business_model, vintages=facts)
     issues.extend(financials.issues)
     reviewed = apply_reviewed_inputs(facts, review_manifest, normalized_ticker, normalized_as_of)
     issues.extend(reviewed.issues)

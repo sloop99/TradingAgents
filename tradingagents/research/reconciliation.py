@@ -131,6 +131,19 @@ def reconcile_facts(facts: list[EvidenceFact]) -> ReconciliationResult:
         definitions = {_normalized_definition(view.definition) for _, view in peers}
         has_untrusted_concept = any(not _is_sec_or_dei_tag(original.source_tag) for original, _ in peers)
         if len(definitions) > 1 and (len(concepts) > 1 or has_untrusted_concept):
+            resolution = _resolve_revenue_tags(metric, peers)
+            if resolution is not None:
+                keep_tag, detail = resolution
+                excluded.update(
+                    original.fact_id for original, _ in peers if (original.source_tag or "").casefold() != keep_tag
+                )
+                issues.append(ResearchIssue(
+                    code="REVENUE_DEFINITION_RESOLVED",
+                    message=f"Revenue for {start or 'instant'} to {end} is reported under several SEC tags; {detail}.",
+                    severity=IssueSeverity.INFO,
+                    metric=metric,
+                ))
+                continue
             excluded.update(original.fact_id for original, _ in peers)
             issues.append(_issue("DEFINITION_CONFLICT", metric, start, end, "use different accounting definitions"))
 
@@ -283,6 +296,56 @@ def _exact_group_sort_key(key: tuple[str, str, str | None, str, str]) -> tuple[s
 def _is_sec_or_dei_tag(value: str | None) -> bool:
     tag = _normalized_tag(value)
     return tag.startswith("us-gaap:") or tag.startswith("dei:")
+
+
+# Total revenue first; contract revenue is the ASC 606 subset of it.
+_TOTAL_REVENUE_TAG = "us-gaap:revenues"
+_CONTRACT_REVENUE_TAGS = {
+    "us-gaap:revenuefromcontractwithcustomerexcludingassessedtax",
+    "us-gaap:revenuefromcontractwithcustomerincludingassessedtax",
+}
+_REVENUE_ROUNDING = 1_000_000
+_REVENUE_TAG_ORDER = (
+    _TOTAL_REVENUE_TAG,
+    "us-gaap:revenuefromcontractwithcustomerexcludingassessedtax",
+    "us-gaap:revenuefromcontractwithcustomerincludingassessedtax",
+)
+
+
+def _resolve_revenue_tags(
+    metric: str, peers: list[tuple[EvidenceFact, EvidenceFact]]
+) -> tuple[str, str] | None:
+    """Pick total revenues when the only disagreement is between standard SEC revenue tags.
+
+    Identical amounts (within rounding) are one figure reported twice; total
+    revenues above contract revenue is the expected superset. Anything else,
+    including untrusted sources or contract revenue exceeding the total, stays
+    a definition conflict.
+    """
+    if metric != "revenue":
+        return None
+    latest: dict[str, EvidenceFact] = {}
+    for original, _view in peers:
+        tag = (original.source_tag or "").casefold()
+        if tag != _TOTAL_REVENUE_TAG and tag not in _CONTRACT_REVENUE_TAGS:
+            return None
+        if tag not in latest or original.published_at > latest[tag].published_at:
+            latest[tag] = original
+    values = [float(fact.value) for fact in latest.values()]
+    if max(values) - min(values) <= _REVENUE_ROUNDING:
+        keep = next(tag for tag in _REVENUE_TAG_ORDER if tag in latest)
+        return keep, "they state the same amount, so one figure is used"
+    total = latest.get(_TOTAL_REVENUE_TAG)
+    contract = [fact for tag, fact in latest.items() if tag in _CONTRACT_REVENUE_TAGS]
+    if total is None or not contract:
+        return None
+    total_value = float(total.value)
+    subset = [float(fact.value) for fact in contract]
+    if all(0 <= value <= total_value for value in subset):
+        return _TOTAL_REVENUE_TAG, (
+            "total Revenues is used; contract revenue is a subset that excludes other revenue such as leases"
+        )
+    return None
 
 
 def _issue(code: str, metric: str, start: str | None, end: str, detail: str) -> ResearchIssue:

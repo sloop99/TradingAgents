@@ -28,6 +28,8 @@ SHARE_COUNT_TOLERANCE = 0.10
 # Price dates can differ by a session or two from the vendor snapshot; larger
 # gaps mean the share count and the vendor cap describe different share sets.
 MARKET_CAP_TOLERANCE = 0.10
+# Above this, earnings are too close to zero for P/E to describe the valuation.
+MEANINGFUL_PE_LIMIT = 150
 
 _SEC_SHARE_TAGS = {"dei:EntityCommonStockSharesOutstanding", "us-gaap:CommonStockSharesOutstanding"}
 # Components that do not overlap one another; a reported total is used only when
@@ -92,6 +94,12 @@ def estimate_valuation(facts: list[dict[str, Any]], as_of: str) -> dict[str, Any
         "ev_to_revenue": ratio(enterprise_value, _value(ttm["revenue"]), "revenue") if enterprise_value is not None else None,
         "price_to_free_cash_flow": ratio(market_cap, _value(ttm["free_cash_flow"]), "free cash flow"),
     }
+    pe = multiples["price_to_earnings"]
+    if pe is not None and pe > MEANINGFUL_PE_LIMIT:
+        notes.append(
+            f"GAAP earnings are near breakeven, so the P/E of {pe:,.0f}x says little; "
+            "sales and free-cash-flow multiples are more useful here."
+        )
     return {
         "status": "estimated",
         "as_of": str(as_of)[:10],

@@ -154,3 +154,11 @@ def test_packet_context_gives_agents_the_estimate():
                   for i, f in enumerate(base_facts())],
     }
     assert "Estimated valuation (unverified" in ResearchPacket.from_dict(packet).render_context()
+
+
+def test_near_breakeven_earnings_flag_the_pe_as_not_useful():
+    facts = [f for f in base_facts() if f["metric"] != "net_income_ttm"]
+    facts.append(fact("net_income_ttm", 50_000_000, "2026-06-27", period_start="2025-06-29"))
+    result = estimate_valuation(facts, AS_OF)
+    assert result["multiples"]["price_to_earnings"] == pytest.approx(2200.0)
+    assert any("near breakeven" in note for note in result["notes"])

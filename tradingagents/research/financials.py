@@ -55,13 +55,17 @@ class FinancialResult:
 
 
 def analyze_financials(
-    selected_facts: list[EvidenceFact], business_model: BusinessModel
+    selected_facts: list[EvidenceFact],
+    business_model: BusinessModel,
+    vintages: list[EvidenceFact] | None = None,
 ) -> FinancialResult:
     """Normalize duration facts and calculate only well-supported analytics.
 
     ``selected_facts`` must be the output of source reconciliation.  Defensive
     conflict checks remain here because period arithmetic must fail closed if a
-    caller bypasses or weakens that earlier stage.
+    caller bypasses or weakens that earlier stage.  ``vintages`` are every
+    reported edition of those facts (original and restated filings); they are
+    used only to explain a direct-versus-derived quarter gap, never as inputs.
     """
 
     facts = sorted(selected_facts, key=_fact_sort_key)
@@ -82,7 +86,7 @@ def analyze_financials(
         and not (_metric(fact) in _BANK_CASH_METRICS and business_model is BusinessModel.BANK)
     ]
 
-    quarters = _derive_quarters(additive, safe_facts, issues, blocked)
+    quarters = _derive_quarters(additive, safe_facts, issues, blocked, vintages or facts)
     derived.extend(quarters)
 
     # A direct-versus-derived quarter conflict discovered above invalidates the
@@ -140,6 +144,7 @@ def _derive_quarters(
     all_reported: list[EvidenceFact],
     issues: list[ResearchIssue],
     blocked: set[tuple[str, str | None, str]],
+    vintages: list[EvidenceFact],
 ) -> list[EvidenceFact]:
     by_signature: dict[tuple[str, str, str, str, str], list[EvidenceFact]] = defaultdict(list)
     for fact in additive:
@@ -199,6 +204,18 @@ def _derive_quarters(
             if direct:
                 if len(direct) == 1 and _same_number(direct[0].value, value):
                     continue
+                explanation = _explained_quarter_gap(direct, later, earlier, value, vintages)
+                if explanation:
+                    issues.append(
+                        _issue(
+                            "QUARTER_DERIVATION_RECONCILED",
+                            f"Reported and cumulative-derived {metric} for {quarter_start.isoformat()} to "
+                            f"{later.period_end} differ only by {explanation}; the reported quarter is used.",
+                            IssueSeverity.INFO,
+                            metric,
+                        )
+                    )
+                    continue
                 issues.append(
                     _issue(
                         "QUARTER_DERIVATION_CONFLICT",
@@ -225,6 +242,60 @@ def _derive_quarters(
                 )
             )
     return derived
+
+
+def _rounding_unit(values: set[float]) -> float:
+    """The reporting precision shared by every value (filings round to thousands or millions).
+
+    Values not rounded to at least thousands are treated as exact: no slack.
+    """
+    for unit in (1_000_000, 100_000, 10_000, 1_000):
+        if all(float(v).is_integer() and int(v) % unit == 0 for v in values if v):
+            return float(unit)
+    return 0.0
+
+
+def _explained_quarter_gap(
+    direct: list[EvidenceFact],
+    later: EvidenceFact,
+    earlier: EvidenceFact,
+    derived_value: float,
+    vintages: list[EvidenceFact],
+) -> str | None:
+    """Why a derived quarter differs from the reported one, if the gap is benign.
+
+    Two benign causes are recognised: rounding in the filings' reporting unit,
+    and restatements, where a later filing revised one of the figures, so some
+    combination of filing editions reproduces the reported quarter.
+    """
+
+    def editions(fact: EvidenceFact) -> set[float]:
+        return {
+            float(item.value)
+            for item in vintages
+            if _metric(item) == _metric(fact)
+            and item.unit.casefold() == fact.unit.casefold()
+            and item.period_start == fact.period_start
+            and item.period_end == fact.period_end
+        } | {float(fact.value)}
+
+    reported = set().union(*(editions(item) for item in direct))
+    later_values, earlier_values = editions(later), editions(earlier)
+    unit = _rounding_unit(reported | later_values | earlier_values)
+
+    def close(left: float, right: float) -> bool:
+        return _same_number(left, right) or abs(left - right) <= unit
+
+    selected = {float(item.value) for item in direct}
+    if any(_same_number(derived_value, value) for value in reported - selected):
+        return "a restated reported quarter (an earlier filing edition matches exactly)"
+    if any(close(derived_value, value) for value in reported):
+        return f"rounding in the filings' reporting unit ({unit:,.0f})"
+    for later_value in later_values:
+        for earlier_value in earlier_values:
+            if any(close(later_value - earlier_value, value) for value in reported):
+                return "restated cumulative figures (a later filing revised an earlier period)"
+    return None
 
 
 def _derive_ttm(
@@ -295,6 +366,20 @@ def _derive_ttm(
                 if len(direct) == 1 and _same_number(direct[0].value, value):
                     # The filing already states the exact annual interval.  It
                     # is the clearer representation of the same measurement.
+                    continue
+                unit = _rounding_unit({float(fact.value) for fact in [*window, *direct]})
+                # Each rounded input can be off by half a unit.
+                allowance = unit * (len(window) + 1) / 2
+                if unit and all(abs(float(fact.value) - value) <= allowance for fact in direct):
+                    issues.append(
+                        _issue(
+                            "TTM_ANNUAL_RECONCILED",
+                            f"Summed quarters and the stated annual {metric} for {start} to {end} differ only by "
+                            f"rounding in the filings' reporting unit ({unit:,.0f}); the stated annual figure is used.",
+                            IssueSeverity.INFO,
+                            metric,
+                        )
+                    )
                     continue
                 issues.append(
                     _issue(

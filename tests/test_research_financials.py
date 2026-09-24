@@ -351,3 +351,87 @@ def test_result_summary_is_json_safe_and_all_derived_lineage_is_closed():
         "stale_inputs",
         "limitations",
     }
+
+
+@pytest.mark.unit
+def test_quarter_gap_within_filing_rounding_is_reconciled_not_a_conflict():
+    # Figures reported in millions: 12,189M - 6,001M = 6,188M vs a reported 6,187M (one rounding unit).
+    inputs = [
+        fact("q1-ytd", "revenue", 6_001_000_000, "2025-01-01", "2025-03-31"),
+        fact("h1-ytd", "revenue", 12_189_000_000, "2025-01-01", "2025-06-30"),
+        fact("q2-direct", "revenue", 6_187_000_000, "2025-04-01", "2025-06-30"),
+        fact("q2-net", "net_income", 600_000_000, "2025-04-01", "2025-06-30"),
+    ]
+
+    result = analyze_financials(inputs, BusinessModel.GENERAL)
+
+    assert not any(issue.code == "QUARTER_DERIVATION_CONFLICT" for issue in result.issues)
+    reconciled = next(issue for issue in result.issues if issue.code == "QUARTER_DERIVATION_RECONCILED")
+    assert "rounding" in reconciled.message and reconciled.severity.value == "info"
+    assert [f for f in metrics(result, "net_margin") if f.period_end == "2025-06-30"]
+
+
+@pytest.mark.unit
+def test_quarter_gap_beyond_rounding_still_conflicts():
+    inputs = [
+        fact("q1-ytd", "revenue", 6_001_000_000, "2025-01-01", "2025-03-31"),
+        fact("h1-ytd", "revenue", 12_189_000_000, "2025-01-01", "2025-06-30"),
+        fact("q2-direct", "revenue", 6_185_000_000, "2025-04-01", "2025-06-30"),
+    ]
+
+    result = analyze_financials(inputs, BusinessModel.GENERAL)
+
+    assert any(issue.code == "QUARTER_DERIVATION_CONFLICT" for issue in result.issues)
+
+
+@pytest.mark.unit
+def test_quarter_gap_from_a_restated_earlier_filing_is_reconciled():
+    # A later filing restated the six-month loss; the nine-month figure is the original edition.
+    h1_restated = fact("c:h1", "net_income", -174_417_000, "2025-02-01", "2025-07-31", published="2026-06-01")
+    nine_months = fact("b:9m", "net_income", -221_879_000, "2025-02-01", "2025-10-31", published="2025-12-01")
+    q3_direct = fact("b:q3", "net_income", -33_997_000, "2025-08-01", "2025-10-31", published="2025-12-01")
+    h1_original = fact("a:h1", "net_income", -187_882_000, "2025-02-01", "2025-07-31", published="2025-09-01")
+
+    result = analyze_financials(
+        [h1_restated, nine_months, q3_direct], BusinessModel.GENERAL,
+        vintages=[h1_original, h1_restated, nine_months, q3_direct],
+    )
+
+    assert not any(issue.code == "QUARTER_DERIVATION_CONFLICT" for issue in result.issues)
+    reconciled = next(issue for issue in result.issues if issue.code == "QUARTER_DERIVATION_RECONCILED")
+    assert "restated" in reconciled.message
+
+
+@pytest.mark.unit
+def test_restatement_that_does_not_explain_the_gap_still_conflicts():
+    h1_restated = fact("c:h1", "net_income", -174_417_000, "2025-02-01", "2025-07-31", published="2026-06-01")
+    nine_months = fact("b:9m", "net_income", -221_879_000, "2025-02-01", "2025-10-31", published="2025-12-01")
+    q3_direct = fact("b:q3", "net_income", -26_539_000, "2025-08-01", "2025-10-31", published="2025-12-01")
+    h1_original = fact("a:h1", "net_income", -187_882_000, "2025-02-01", "2025-07-31", published="2025-09-01")
+
+    result = analyze_financials(
+        [h1_restated, nine_months, q3_direct], BusinessModel.GENERAL,
+        vintages=[h1_original, h1_restated, nine_months, q3_direct],
+    )
+
+    assert any(issue.code == "QUARTER_DERIVATION_CONFLICT" for issue in result.issues)
+
+
+@pytest.mark.unit
+def test_ttm_within_rounding_of_the_annual_figure_is_reconciled():
+    # Four quarters reported in millions sum to 2M below the rounded annual total.
+    quarters = [
+        fact(f"q{i}", "revenue", value, start, end)
+        for i, (value, start, end) in enumerate([
+            (10_001_000_000, "2025-01-01", "2025-03-31"),
+            (10_001_000_000, "2025-04-01", "2025-06-30"),
+            (10_001_000_000, "2025-07-01", "2025-09-30"),
+            (10_001_000_000, "2025-10-01", "2025-12-31"),
+        ])
+    ]
+    annual = fact("fy", "revenue", 40_006_000_000, "2025-01-01", "2025-12-31")
+
+    result = analyze_financials(quarters + [annual], BusinessModel.GENERAL)
+
+    assert not any(issue.code == "TTM_ANNUAL_CONFLICT" for issue in result.issues)
+    assert any(issue.code == "TTM_ANNUAL_RECONCILED" for issue in result.issues)

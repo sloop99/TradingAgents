@@ -155,3 +155,59 @@ def test_sec_capitalization_tags_normalize_without_scope_equivalence_or_synthesi
     }
     assert normalize_concept(facts[2]).metric == "long_term_debt_reported"
     assert not any(issue.code == "UNIT_CONFLICT" for issue in result.issues)
+
+
+TOTAL = "us-gaap:Revenues"
+CONTRACT = "us-gaap:RevenueFromContractWithCustomerExcludingAssessedTax"
+
+
+@pytest.mark.unit
+def test_identical_revenue_under_two_sec_tags_is_not_a_conflict():
+    result = reconcile_facts([
+        fact("total", "revenue", 90_234_000_000, tag=TOTAL, definition="Revenues"),
+        fact("contract", "revenue", 90_234_000_000, tag=CONTRACT,
+             definition="Revenue from Contract with Customer, Excluding Assessed Tax"),
+    ])
+
+    assert [f.fact_id for f in result.selected_facts] == ["total"]
+    assert not any(issue.code == "DEFINITION_CONFLICT" for issue in result.issues)
+    resolved = next(issue for issue in result.issues if issue.code == "REVENUE_DEFINITION_RESOLVED")
+    assert resolved.severity.value == "info" and "same amount" in resolved.message
+
+
+@pytest.mark.unit
+def test_total_revenues_are_preferred_over_the_contract_revenue_subset():
+    result = reconcile_facts([
+        fact("total", "revenue", 206_168_000, tag=TOTAL, definition="Revenues"),
+        fact("contract", "revenue", 203_412_000, tag=CONTRACT,
+             definition="Revenue from Contract with Customer, Excluding Assessed Tax"),
+    ])
+
+    assert [f.fact_id for f in result.selected_facts] == ["total"]
+    resolved = next(issue for issue in result.issues if issue.code == "REVENUE_DEFINITION_RESOLVED")
+    assert "subset" in resolved.message
+
+
+@pytest.mark.unit
+def test_contract_revenue_above_total_revenues_is_still_a_conflict():
+    result = reconcile_facts([
+        fact("total", "revenue", 200_000_000, tag=TOTAL, definition="Revenues"),
+        fact("contract", "revenue", 210_000_000, tag=CONTRACT,
+             definition="Revenue from Contract with Customer, Excluding Assessed Tax"),
+    ])
+
+    assert result.selected_facts == []
+    assert any(issue.code == "DEFINITION_CONFLICT" for issue in result.issues)
+
+
+@pytest.mark.unit
+def test_identical_contract_revenue_tags_without_a_total_are_not_a_conflict():
+    result = reconcile_facts([
+        fact("excl", "revenue", 18_471_000, tag=CONTRACT,
+             definition="Revenue from Contract with Customer, Excluding Assessed Tax"),
+        fact("incl", "revenue", 18_471_000, tag="us-gaap:RevenueFromContractWithCustomerIncludingAssessedTax",
+             definition="Revenue from Contract with Customer, Including Assessed Tax"),
+    ])
+
+    assert [f.fact_id for f in result.selected_facts] == ["excl"]
+    assert not any(issue.code == "DEFINITION_CONFLICT" for issue in result.issues)
