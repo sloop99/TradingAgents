@@ -71,12 +71,12 @@ def estimate_valuation(facts: list[dict[str, Any]], as_of: str) -> dict[str, Any
     ttm = {
         name: _fresh_ttm(usable, metric, cutoff, label, notes)
         for name, metric, label in (
-            ("revenue", "revenue_ttm", "revenue"),
-            ("net_income", "net_income_ttm", "earnings"),
-            ("free_cash_flow", "free_cash_flow_ttm", "free cash flow"),
-            ("operating_income", "operating_income_ttm", "operating income"),
+            ("revenue", "revenue", "revenue"),
+            ("net_income", "net_income", "earnings"),
+            ("operating_income", "operating_income", "operating income"),
         )
     }
+    ttm["free_cash_flow"] = _free_cash_flow(usable, cutoff, notes)
     debt, cash, balance_date = _balance_sheet(usable, cutoff, notes)
     enterprise_value = market_cap + debt - cash if market_cap is not None and debt is not None and cash is not None else None
 
@@ -138,8 +138,47 @@ def _shares(facts, cutoff, notes) -> tuple[float | None, str | None]:
     return None, None
 
 
+def _twelve_months(fact) -> bool:
+    try:
+        days = (date.fromisoformat(str(fact["period_end"])[:10]) - date.fromisoformat(str(fact["period_start"])[:10])).days + 1
+    except (KeyError, TypeError, ValueError):
+        return False
+    return 330 <= days <= 400
+
+
+def _latest_twelve_month(facts, metric) -> dict[str, Any] | None:
+    """The newest trailing-12-month figure: a calculated ``<metric>_ttm`` or a directly stated
+    12-month period (issuers that state TTM columns, and any issuer right after its 10-K)."""
+    candidates = [f for f in facts if f.get("metric") == f"{metric}_ttm"]
+    candidates += [f for f in facts if f.get("metric") == metric and _twelve_months(f)]
+    return max(candidates, key=lambda f: (str(f.get("period_end")), str(f.get("published_at") or ""))) if candidates else None
+
+
+def _free_cash_flow(facts, cutoff, notes) -> dict[str, Any] | None:
+    direct = _latest_twelve_month(facts, "free_cash_flow")
+    if direct is not None:
+        return _fresh_ttm(facts, "free_cash_flow", cutoff, "free cash flow", notes)
+    cash_flow = _latest_twelve_month(facts, "operating_cash_flow")
+    capex = _latest_twelve_month(facts, "capital_expenditures")
+    broad = False
+    if capex is None or (cash_flow is not None and capex["period_end"] != cash_flow["period_end"]):
+        capex = _latest_twelve_month(facts, "capital_expenditures_productive_assets")
+        broad = capex is not None
+    if cash_flow is None or capex is None or cash_flow["period_end"] != capex["period_end"]:
+        notes.append("TTM free cash flow is not available in the evidence packet.")
+        return None
+    if broad:
+        notes.append(
+            "Free cash flow is estimated as operating cash flow less purchases of productive assets, "
+            "which include software and intangibles, so it may be understated versus PP&E-only capex."
+        )
+    synthetic = {"metric": "free_cash_flow_ttm", "value": _number(cash_flow) - abs(_number(capex)),
+                 "period_start": cash_flow.get("period_start"), "period_end": cash_flow["period_end"]}
+    return _fresh_ttm([synthetic], "free_cash_flow", cutoff, "free cash flow", notes)
+
+
 def _fresh_ttm(facts, metric, cutoff, label, notes) -> dict[str, Any] | None:
-    latest = _latest(facts, {metric})
+    latest = _latest_twelve_month(facts, metric)
     if latest is None:
         notes.append(f"TTM {label} is not available in the evidence packet.")
         return None

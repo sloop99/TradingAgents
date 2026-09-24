@@ -162,3 +162,28 @@ def test_near_breakeven_earnings_flag_the_pe_as_not_useful():
     result = estimate_valuation(facts, AS_OF)
     assert result["multiples"]["price_to_earnings"] == pytest.approx(2200.0)
     assert any("near breakeven" in note for note in result["notes"])
+
+
+def test_directly_stated_twelve_month_figures_count_as_ttm():
+    # Some issuers (and every issuer right after a 10-K) state the latest 12 months directly.
+    facts = [f for f in base_facts() if f["metric"] != "net_income_ttm"]
+    facts += [
+        fact("net_income", 5_000_000_000, "2025-12-31", period_start="2025-01-01"),
+        fact("net_income", 11_000_000_000, "2026-06-30", period_start="2025-07-01"),
+        fact("net_income", 3_000_000_000, "2026-06-30", period_start="2026-04-01"),
+    ]
+    result = estimate_valuation(facts, AS_OF)
+    assert result["ttm"]["net_income"]["value"] == 11_000_000_000
+    assert result["multiples"]["price_to_earnings"] == pytest.approx(10.0)
+
+
+def test_free_cash_flow_falls_back_to_cash_flow_less_productive_asset_capex():
+    facts = [f for f in base_facts() if f["metric"] != "free_cash_flow_ttm"]
+    facts += [
+        fact("operating_cash_flow", 12_000_000_000, "2026-06-30", period_start="2025-07-01"),
+        fact("capital_expenditures_productive_assets", 7_600_000_000, "2026-06-30", period_start="2025-07-01"),
+    ]
+    result = estimate_valuation(facts, AS_OF)
+    assert result["ttm"]["free_cash_flow"]["value"] == pytest.approx(4_400_000_000)
+    assert result["multiples"]["price_to_free_cash_flow"] == pytest.approx(25.0)
+    assert any("software" in note for note in result["notes"])
