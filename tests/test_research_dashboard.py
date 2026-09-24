@@ -356,3 +356,25 @@ def test_last_close_on_or_before_the_as_of_date_comes_from_the_evidence_packet(t
     assert build_index([tmp_path]).public_payload()["runs"][0]["evidence_close"] == {
         "value": 339.75, "date": "2026-09-22",
     }
+
+
+def test_estimated_valuation_is_derived_for_packets_without_one(tmp_path):
+    run = _rated_run(tmp_path, "AAPL", "2026-09-23", "Hold")
+
+    def fact(metric, value, date, unit="USD", tag="us-gaap:X"):
+        return {"metric": metric, "value": value, "unit": unit, "period_end": date, "source_tag": tag}
+
+    _write(run / "packet.json", json.dumps({"ticker": "AAPL", "as_of": "2026-09-23", "facts": [
+        fact("close", 100.0, "2026-09-22", unit="USD/share"),
+        fact("shares_outstanding", 1e9, "2026-07-17", unit="shares", tag="dei:EntityCommonStockSharesOutstanding"),
+        fact("net_income_ttm", 5e9, "2026-06-27"),
+    ]}))
+    estimate = build_index([tmp_path]).public_payload()["runs"][0]["estimated_valuation"]
+    assert estimate["status"] == "estimated"
+    assert estimate["market_cap"] == 100e9
+    assert estimate["multiples"]["price_to_earnings"] == 20.0
+
+
+def test_runs_without_market_data_have_no_estimate(tmp_path):
+    _rated_run(tmp_path, "AMZN", "2026-09-01", "Overweight")
+    assert build_index([tmp_path]).public_payload()["runs"][0]["estimated_valuation"] is None

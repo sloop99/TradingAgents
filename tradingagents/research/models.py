@@ -457,6 +457,16 @@ class ResearchPacket:
             )
             suffix = f"; {len(snapshots) - len(shown)} additional aggregate snapshots retained." if len(snapshots) > len(shown) else "."
             lines.append("Analyst targets: Yahoo aggregate vendor observations only; target horizon is unknown and no firms are inferred. " + observations + suffix)
+        estimate = self.financial_analysis.get("estimated_valuation")
+        if estimate is None:
+            # Older packets predate the stored estimate; derive it from their facts.
+            from .estimated_valuation import estimate_valuation
+
+            estimate = estimate_valuation([fact.to_dict() for fact in self.facts], self.as_of)
+        if estimate:
+            from .estimated_valuation import describe_estimate
+
+            lines.append(describe_estimate(estimate))
         filing_count = sum(f.kind is FactKind.REPORTED and f.metric.startswith("filing_") for f in self.facts)
         if filing_count:
             lines.append(f"Inline filing candidates: {filing_count}; retained for context review, excluded from consolidated calculations.")

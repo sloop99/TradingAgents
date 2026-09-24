@@ -149,3 +149,72 @@ function rangeScale(model, street, close) {
   wrap.setAttribute("aria-label", `Price target ranges: ${describe.join(", ")}.`);
   return wrap;
 }
+
+// ---------- estimated (unverified) valuation ----------
+
+const MULTIPLES = [
+  ["price_to_earnings", "P/E"],
+  ["price_to_sales", "P/S"],
+  ["ev_to_revenue", "EV/Revenue"],
+  ["price_to_free_cash_flow", "P/FCF"],
+];
+
+export function compactMoney(value) {
+  if (!finite(value)) return "—";
+  const abs = Math.abs(Number(value));
+  if (abs >= 1e12) return `$${(value / 1e12).toFixed(2)}T`;
+  if (abs >= 1e9) return `$${(value / 1e9).toFixed(1)}B`;
+  return `$${(value / 1e6).toFixed(1)}M`;
+}
+
+const multiple = (value) => (finite(value) ? `${Number(value).toFixed(1)}×` : "n/a");
+
+/** The first available headline multiple, e.g. {label: "P/E", value: "38.5×"}, or null. */
+export function headlineMultiple(run) {
+  const estimate = run.estimated_valuation;
+  if (!estimate?.multiples) return null;
+  const hit = MULTIPLES.find(([key]) => finite(estimate.multiples[key]));
+  return hit ? { label: hit[1], value: multiple(estimate.multiples[hit[0]]) } : null;
+}
+
+export function estimateTitle(run) {
+  const estimate = run.estimated_valuation;
+  if (!estimate) return "";
+  const parts = [`Estimated, unverified · market cap ${compactMoney(estimate.market_cap)}`];
+  if (finite(estimate.enterprise_value)) parts.push(`EV ${compactMoney(estimate.enterprise_value)}`);
+  MULTIPLES.forEach(([key, label]) => parts.push(`${label} ${multiple(estimate.multiples?.[key])}`));
+  return parts.join(" · ");
+}
+
+export function renderValuation(run) {
+  const estimate = run.estimated_valuation;
+  if (!estimate || !finite(estimate.market_cap)) return null;
+  const panel = el("section", "valuation panel");
+  panel.setAttribute("aria-label", "Estimated valuation");
+  const head = el("div", "valuation-head");
+  head.append(el("p", "eyebrow", "Estimated valuation · unverified"));
+  const basis = { sec_cover: "SEC share count", vendor: "vendor share count", vendor_market_cap: "vendor market cap" }[estimate.shares?.source]
+    || "unknown share basis";
+  head.append(el("span", "valuation-basis", `${formatDate(estimate.price?.date, "day")} close ${money(estimate.price?.value)} × ${basis}`));
+  panel.append(head);
+  const grid = el("dl", "valuation-grid");
+  const cell = (label, value) => {
+    const wrap = el("div");
+    wrap.append(el("dt", "", label), el("dd", value === "n/a" || value === "—" ? "muted" : "", value));
+    grid.append(wrap);
+  };
+  cell("Market cap", compactMoney(estimate.market_cap));
+  cell("Enterprise value", compactMoney(estimate.enterprise_value));
+  MULTIPLES.forEach(([key, label]) => cell(label, multiple(estimate.multiples?.[key])));
+  panel.append(grid);
+  const notes = (estimate.notes || []).filter((note) => !note.includes("completeness is not verified"));
+  if (notes.length) {
+    const details = el("details", "target-basis");
+    details.append(el("summary", "", `Caveats (${notes.length})`));
+    const list = el("ul");
+    notes.forEach((note) => list.append(el("li", "", note)));
+    details.append(list);
+    panel.append(details);
+  }
+  return panel;
+}

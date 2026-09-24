@@ -8,6 +8,7 @@ from typing import Any, Protocol
 
 from .capitalization import analyze_capitalization
 from .checks import classify_business, run_checks
+from .estimated_valuation import estimate_valuation
 from .filing_reconciliation import analyze_filing_contexts
 from .financials import analyze_financials
 from .listing_review import summarize_listing_evidence
@@ -297,6 +298,9 @@ def build_packet(
     ):
         status = CoverageStatus.MATERIAL_CONFLICT
 
+    all_facts = facts + financials.derived_facts + reviewed.derived_facts + capitalization.derived_facts + filing_review.derived_facts
+    estimate = estimate_valuation([fact.to_dict() for fact in all_facts], normalized_as_of)
+
     return ResearchPacket(
         ticker=normalized_ticker,
         as_of=normalized_as_of,
@@ -305,7 +309,7 @@ def build_packet(
         status=status,
         business_model=checked.business_model,
         identity=identity,
-        facts=facts + financials.derived_facts + reviewed.derived_facts + capitalization.derived_facts + filing_review.derived_facts,
+        facts=all_facts,
         documents=sorted(
             documents,
             key=lambda item: (item.published_at, item.document_id),
@@ -326,6 +330,7 @@ def build_packet(
             "analyst_targets": {"status": "partial" if analyst_snapshots else "unsupported",
                                 "snapshots": analyst_snapshots,
                                 "firm_level_consensus_reconstructed": False},
+            "estimated_valuation": estimate,
         },
     )
 

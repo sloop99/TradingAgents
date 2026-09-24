@@ -76,6 +76,7 @@ class ResearchRun:
     executive_summary: str | None = None
     model_target: dict[str, Any] | None = None
     evidence_close: dict[str, Any] | None = None
+    estimated_valuation: dict[str, Any] | None = None
 
     @property
     def rating(self) -> str:
@@ -113,6 +114,7 @@ class ResearchRun:
             "rating": self.rating,
             "model_target": self.model_target,
             "evidence_close": self.evidence_close,
+            "estimated_valuation": self.estimated_valuation,
         }
 
 
@@ -320,6 +322,19 @@ def _evidence_close(packet: dict[str, Any], as_of: str) -> dict[str, Any] | None
     return {"value": float(latest["value"]), "date": latest["period_end"][:10]}
 
 
+def _estimated_valuation(packet: dict[str, Any], as_of: str) -> dict[str, Any] | None:
+    """The packet's stored estimate, or one derived from its facts for older packets."""
+    analysis = packet.get("financial_analysis") if isinstance(packet.get("financial_analysis"), dict) else {}
+    if "estimated_valuation" in analysis:
+        return analysis["estimated_valuation"]
+    facts = [fact for fact in packet.get("facts", []) if isinstance(fact, dict)]
+    if not facts or as_of == "unknown":
+        return None
+    from tradingagents.research.estimated_valuation import estimate_valuation
+
+    return estimate_valuation(facts, as_of)
+
+
 def _parse_run(report: Path, source_root: Path) -> ResearchRun:
     report_dir = report.parent
     run_dir = report_dir.parent if report_dir.name in {"report", "reports"} else report_dir
@@ -438,6 +453,7 @@ def _parse_run(report: Path, source_root: Path) -> ResearchRun:
         executive_summary=_executive_summary(decision_text),
         model_target=_model_target(decision_text),
         evidence_close=_evidence_close(packet, analysis_date),
+        estimated_valuation=_estimated_valuation(packet, analysis_date),
     )
 
 

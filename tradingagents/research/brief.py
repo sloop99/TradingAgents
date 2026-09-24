@@ -32,6 +32,12 @@ def create_research_brief(packet: ResearchPacket) -> str:
     lines += ["", "## Valuation requirements", ""]
     for metric, audit in cap.get("valuation_readiness", {}).items():
         lines.append(f"- {metric}: {audit['status']}; unresolved: {', '.join(audit.get('unresolved', [])) or 'none'}.")
+    estimate = analysis.get("estimated_valuation")
+    if estimate:
+        from .estimated_valuation import describe_estimate
+
+        lines += ["", "## Estimated valuation (unverified)", "", describe_estimate(estimate, max_notes=6),
+                  "These multiples use vendor prices and share counts; they are not the verified capitalization audit above."]
     lines += ["", "## Analyst expectations", ""]
     snapshots = analysis.get("analyst_targets", {}).get("snapshots", [])
     for snapshot in snapshots:

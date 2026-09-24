@@ -5,7 +5,7 @@ import {
   runHref, truncate, validSectorPoints, valuationLabel, verdictTag,
 } from "../format.js";
 import { mountSectorChart } from "../sector-chart.js";
-import { modelTarget, modelTitle, streetTargets, streetTitle } from "../targets.js";
+import { estimateTitle, headlineMultiple, modelTarget, modelTitle, streetTargets, streetTitle } from "../targets.js";
 import { errorPanel, loadingState, sectorBanner, sectorMissing } from "./shared.js";
 
 const newestFirst = (a, b) =>
@@ -141,12 +141,11 @@ function positionsTable(title, rows, { withCost, isTest = false }, register) {
     const change = isTest
       ? { text: "test run", cls: "chg-muted" }
       : describeChange({ rating: summary.rating, decision: summary.decision }, summary.previous);
-    const changeCell = el("td", change.cls, change.text);
+    const changeCell = el("td", `chg ${change.cls}`, change.text);
 
     const evidenceCell = el("td", "col-opt");
     evidenceCell.append(evidenceNode(run.evidence_status));
-    const valuation = valuationLabel(run.valuation_status);
-    const valuationCell = el("td", `col-opt${valuation === "—" ? " muted" : ""}`, valuation);
+    const valuationCell = valuationCellFor(run);
 
     const cells = [tickerCell, verdictCell, changeCell, evidenceCell, valuationCell, targetCell(run), streetCell(run)];
     if (withCost) cells.push(costCell(run));
@@ -159,6 +158,20 @@ function positionsTable(title, rows, { withCost, isTest = false }, register) {
   });
   table.append(thead, tbody);
   return table;
+}
+
+function valuationCellFor(run) {
+  // A verified status wins; otherwise show the headline estimated multiple, marked "est".
+  const verified = !["unsupported", "unknown", "", undefined, null].includes(run.valuation_status);
+  const headline = headlineMultiple(run);
+  if (!verified && headline) {
+    const cell = el("td", "num col-opt", `${headline.label} ${headline.value}`);
+    cell.append(el("span", "est", " est"));
+    cell.title = estimateTitle(run);
+    return cell;
+  }
+  const label = valuationLabel(run.valuation_status);
+  return el("td", `col-opt${label === "—" ? " muted" : ""}`, label);
 }
 
 function targetCell(run) {
