@@ -13,9 +13,9 @@ import logging
 import pandas as pd
 import pytest
 
-import tradingagents.dataflows.market_data_validator as validator
-import tradingagents.dataflows.stockstats_utils as su
-import tradingagents.dataflows.y_finance as yfin
+import tradingagents.dataflows.vendors.yahoo.market as yfin
+import tradingagents.dataflows.vendors.yahoo.ohlcv as su
+import tradingagents.dataflows.vendors.yahoo.snapshot as validator
 
 # Full-day NYSE closures, hard-coded so the tests don't check the calendar
 # against itself.
@@ -78,14 +78,14 @@ class TestFindMissingSessions:
 class TestGapIsSurfaced:
     def test_verified_snapshot_warns(self, monkeypatch):
         data = _frame(_sessions("2026-05-01", "2026-09-23", drop={"2026-09-22"}))
-        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d: data)
+        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d, **k: data)
         snap = validator.build_verified_market_snapshot("OUST", "2026-09-23")
         assert "DATA GAP" in snap
         assert "2026-09-22" in snap
 
     def test_verified_snapshot_is_quiet_for_complete_data(self, monkeypatch):
         data = _frame(_sessions("2026-05-01", "2026-09-23"))
-        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d: data)
+        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d, **k: data)
         snap = validator.build_verified_market_snapshot("OUST", "2026-09-23")
         assert "DATA GAP" not in snap
 

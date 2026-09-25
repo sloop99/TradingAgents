@@ -9,9 +9,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-import tradingagents.dataflows.market_data_validator as validator
-import tradingagents.dataflows.stockstats_utils as su
-import tradingagents.dataflows.y_finance as yfin
+import tradingagents.dataflows.vendors.yahoo.market as yfin
+import tradingagents.dataflows.vendors.yahoo.ohlcv as su
+import tradingagents.dataflows.vendors.yahoo.snapshot as validator
 
 # 2026-09-07 is Labor Day.
 SESSIONS = pd.bdate_range("2026-09-01", "2026-09-25").difference(pd.DatetimeIndex(["2026-09-07"]))
@@ -133,7 +133,8 @@ class TestFillMissingSessions:
 class TestRebuiltSessionsReachTheReport:
     def test_load_ohlcv_caches_the_rebuilt_bar(self, tmp_path, monkeypatch):
         monkeypatch.setattr(su, "get_config", lambda: {"data_cache_dir": str(tmp_path)})
-        monkeypatch.setattr(su.pd.Timestamp, "today", staticmethod(lambda: pd.Timestamp("2026-09-25")))
+        # Today is left real: cache freshness compares the file's mtime with it,
+        # so pinning it would make the cached read depend on the day the suite runs.
         monkeypatch.setattr(su.yf, "download", lambda *a, **k: _daily().set_index("Date"))
         monkeypatch.setattr(su.yf, "Ticker", _fake_ticker(hourly=_hourly()))
 
@@ -152,7 +153,7 @@ class TestRebuiltSessionsReachTheReport:
     def test_verified_snapshot_notes_rebuilt_bar(self, monkeypatch):
         monkeypatch.setattr(su.yf, "Ticker", _fake_ticker(hourly=_hourly()))
         data = su.fill_missing_sessions(_daily(), "OUST")
-        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d: data)
+        monkeypatch.setattr(validator, "load_ohlcv", lambda s, d, **k: data)
 
         snap = validator.build_verified_market_snapshot("OUST", "2026-09-25")
         assert "DATA GAP" not in snap

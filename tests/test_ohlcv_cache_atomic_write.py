@@ -13,7 +13,7 @@ import time
 import pandas as pd
 import pytest
 
-import tradingagents.dataflows.stockstats_utils as su
+import tradingagents.dataflows.vendors.yahoo.ohlcv as su
 
 TODAY = pd.Timestamp("2026-07-18")
 OLD = "Date,Close\n2026-07-17,100.0\n"
@@ -21,16 +21,14 @@ OLD = "Date,Close\n2026-07-17,100.0\n"
 
 @pytest.fixture
 def stale_cache(tmp_path, monkeypatch):
-    """A same-day cache past its TTL, so load_ohlcv downloads and rewrites it."""
+    """A cache past its TTL, so load_ohlcv downloads and rewrites it."""
     monkeypatch.setattr(su, "get_config", lambda: {"data_cache_dir": str(tmp_path)})
     monkeypatch.setattr(su.pd.Timestamp, "today", staticmethod(lambda: TODAY))
     monkeypatch.setattr(su.yf, "download", lambda *a, **k: pd.DataFrame(
         {"Date": pd.to_datetime(["2026-07-17", "2026-07-18"]), "Close": [100.0, 222.0]}
     ).set_index("Date"))
 
-    start = (TODAY - pd.DateOffset(years=5)).strftime("%Y-%m-%d")
-    end = (TODAY + pd.Timedelta(days=1)).strftime("%Y-%m-%d")
-    f = tmp_path / f"AAPL-YFin-data-{start}-{end}.csv"
+    f = tmp_path / "AAPL-YFin-data.csv"
     f.write_text(OLD, encoding="utf-8")
     old = time.time() - su.OHLCV_CACHE_TTL_SECONDS - 60
     os.utime(f, (old, old))
