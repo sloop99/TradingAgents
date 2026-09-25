@@ -153,6 +153,12 @@ docker compose --profile ollama run --rm tradingagents-ollama
 
 TradingAgents supports multiple LLM providers. Set the API key for your chosen provider:
 
+If you have a ChatGPT plan with Codex access and do not want usage-based API
+billing, you can use the installed Codex CLI as the LLM provider. Sign in once
+with `codex login`, then configure `llm_provider: "codex_subscription"` and use
+`"default"` for both model names. This provider uses isolated, read-only
+`codex exec` calls and requires no `OPENAI_API_KEY`.
+
 ```bash
 export OPENAI_API_KEY=...          # OpenAI (GPT)
 export GOOGLE_API_KEY=...          # Google (Gemini)

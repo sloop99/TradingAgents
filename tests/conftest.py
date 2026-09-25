@@ -38,11 +38,25 @@ def _no_network(request, monkeypatch):
     if request.node.get_closest_marker("integration"):
         return
 
+    # Loopback is not the network: the dashboard tests talk to a server they start themselves.
+    connect, connect_ex = socket.socket.connect, socket.socket.connect_ex
+
+    def is_loopback(address):
+        host = address[0] if isinstance(address, tuple) else address
+        return host in ("127.0.0.1", "::1", "localhost")
+
     def refuse(self, address):
+        if is_loopback(address):
+            return connect(self, address)
+        raise OSError(f"test tried to reach the network: {address}")
+
+    def refuse_ex(self, address):
+        if is_loopback(address):
+            return connect_ex(self, address)
         raise OSError(f"test tried to reach the network: {address}")
 
     monkeypatch.setattr(socket.socket, "connect", refuse)
-    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse_ex)
 
 
 _API_KEY_ENV_VARS = (

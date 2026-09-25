@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>Research Ledger</title>
+  <script src="/theme-init.js"></script>
+  <link rel="stylesheet" href="/styles.css">
+  <script type="module" src="/app.js"></script>
+</head>
+<body>
+  <a class="skip-link" href="#view">Skip to content</a>
+  <header class="topbar">
+    <a class="brand" href="#/" aria-label="Research Ledger"><span class="brand-long">RESEARCH </span>LEDGER</a>
+    <nav class="primary-nav" aria-label="Primary">
+      <a href="#/" data-nav="positions">Positions</a>
+      <a href="#/market" data-nav="market">Market</a>
+    </nav>
+    <label class="search">
+      <span class="sr-only">Search tickers, verdicts and theses</span>
+      <span class="search-key" aria-hidden="true">/</span>
+      <input id="search" type="search" placeholder="search ticker, verdict, thesis" autocomplete="off" spellcheck="false">
+    </label>
+    <button id="refresh" class="btn" type="button" aria-label="Refresh the research archive">↻<span class="label">Refresh</span></button>
+    <button id="theme-toggle" class="btn btn-icon" type="button" aria-label="Switch theme">◐</button>
+  </header>
+
+  <main id="view" tabindex="-1">
+    <p class="state">Loading the research archive…</p>
+  </main>
+
+  <footer class="footer">
+    <span id="footer-counts"></span>
+    <span id="footer-carried" hidden>† cost carried forward from an earlier record</span>
+    <details id="footer-warnings" hidden>
+      <summary></summary>
+      <ul></ul>
+    </details>
+    <label class="footer-switch spacer"><input id="show-tests" type="checkbox"> Show test runs</label>
+    <span id="footer-keys"></span>
+  </footer>
+
+  <div id="status" class="status-toast" role="status" aria-live="polite"></div>
+</body>
+</html>

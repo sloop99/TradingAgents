@@ -40,6 +40,34 @@ def _validate_trade_date(trade_date) -> str:
     return value
 
 
+def _research_context(graph) -> str:
+    """Evidence-packet and analyst-expectation context appended for every agent."""
+    parts = []
+    packet = getattr(graph, "_research_packet", None)
+    if packet is not None:
+        parts.append(packet.render_context())
+    consensus = getattr(graph, "_analyst_consensus", None)
+    if consensus is not None:
+        from tradingagents.research.expectations import expectations_context
+
+        parts.append(expectations_context(consensus))
+    return "".join("\n\n" + part for part in parts)
+
+
+def _research_state(graph) -> dict[str, Any]:
+    """The run's evidence fields, set on the initial and the final state."""
+    state: dict[str, Any] = {}
+    packet = getattr(graph, "_research_packet", None)
+    if packet is not None:
+        state["research_packet"] = packet.to_dict()
+        state["evidence_status"] = packet.status.value
+    consensus = getattr(graph, "_analyst_consensus", None)
+    if consensus is not None:
+        state["analyst_consensus"] = consensus
+        state["analyst_target_input"] = getattr(graph, "_analyst_target_input", None)
+    return state
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -67,22 +95,24 @@ class TradingAgentsGraph:
         os.makedirs(self.config["data_cache_dir"], exist_ok=True)
         os.makedirs(self.config["results_dir"], exist_ok=True)
 
-        llm_kwargs = build_llm_kwargs(self.config)
+        deep_kwargs = build_llm_kwargs(self.config, role="deep")
+        quick_kwargs = build_llm_kwargs(self.config, role="quick")
 
         if self.callbacks:
-            llm_kwargs["callbacks"] = self.callbacks
+            deep_kwargs["callbacks"] = self.callbacks
+            quick_kwargs["callbacks"] = self.callbacks
 
         deep_client = create_llm_client(
             provider=self.config["llm_provider"],
             model=self.config["deep_think_llm"],
             base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+            **deep_kwargs,
         )
         quick_client = create_llm_client(
             provider=self.config["llm_provider"],
             model=self.config["quick_think_llm"],
             base_url=self.config.get("backend_url"),
-            **llm_kwargs,
+            **quick_kwargs,
         )
 
         self.deep_thinking_llm = deep_client.get_llm()
@@ -113,6 +143,13 @@ class TradingAgentsGraph:
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
         self._resuming = False
+
+        # Evidence inputs for the current propagate() call (_load_research_inputs).
+        self._research_packet = None
+        self._research_packet_digest = ""
+        self._analyst_consensus = None
+        self._analyst_target_input = None
+        self._analyst_target_digest = ""
 
     def resolve_instrument_context(self, ticker: str, asset_type: str = "stock",
                                    curr_date: str | None = None) -> str:
@@ -145,14 +182,21 @@ class TradingAgentsGraph:
         selection, debate/risk depth, or asset mode starts fresh instead of
         silently continuing the previous graph (#1089).
         """
-        return "|".join([
+        parts = [
             "analysts=" + ",".join(self.selected_analysts),
             f"debate={self.config['max_debate_rounds']}",
             f"risk={self.config['max_risk_discuss_rounds']}",
             f"asset={asset_type}",
             # None, an empty book and a changed book are three different runs.
             f"portfolio={portfolio.fingerprint() if portfolio is not None else 'none'}",
-        ])
+        ]
+        digest = getattr(self, "_research_packet_digest", "")
+        if digest:
+            parts.append(f"evidence={digest}")
+        target_digest = getattr(self, "_analyst_target_digest", "")
+        if target_digest:
+            parts.append(f"analyst_targets={target_digest}")
+        return "|".join(parts)
 
     def propagate(self, company_name, trade_date, asset_type: str = "stock", portfolio=None):
         """Run the trading agents graph for a company on a specific date.
@@ -171,6 +215,8 @@ class TradingAgentsGraph:
         PortfolioRating enum.
         """
         trade_date = _validate_trade_date(trade_date)
+        # Before the checkpoint scope: the evidence digests are part of its key.
+        self._load_research_inputs(company_name, trade_date, asset_type)
 
         with run_config(self.config), \
                 self.checkpoint_scope(company_name, trade_date, asset_type, portfolio) as thread_id_value:
@@ -178,6 +224,35 @@ class TradingAgentsGraph:
                 company_name, trade_date, asset_type=asset_type,
                 checkpoint_thread_id=thread_id_value, portfolio=portfolio,
             )
+
+    def _load_research_inputs(self, company_name, trade_date, asset_type: str) -> None:
+        """Load the configured evidence packet and analyst-target import for this run."""
+        self._research_packet = None
+        self._research_packet_digest = ""
+        self._analyst_consensus = None
+        self._analyst_target_input = None
+        self._analyst_target_digest = ""
+
+        packet_path = self.config.get("research_packet_path")
+        if packet_path:
+            if asset_type != "stock":
+                raise ValueError("Equity research packets require asset_type='stock'")
+            from tradingagents.research.integration import load_packet
+
+            self._research_packet, self._research_packet_digest = load_packet(
+                packet_path, company_name, str(trade_date)
+            )
+
+        target_path = self.config.get("analyst_target_input_path")
+        if target_path:
+            if asset_type != "stock":
+                raise ValueError("Analyst price targets require asset_type='stock'")
+            from tradingagents.research.expectations import load_target_import
+
+            (
+                self._analyst_consensus, self._analyst_target_input,
+                self._analyst_target_digest, _raw,
+            ) = load_target_import(target_path, company_name, str(trade_date))
 
     def begin_checkpoint(self, company_name, trade_date, asset_type: str = "stock", portfolio=None) -> str | None:
         """Recompile the graph with a per-ticker checkpointer and return the
@@ -266,16 +341,21 @@ class TradingAgentsGraph:
         assembled the state itself would skip the decision log.
         """
         self.settle_pending(company_name)
-        return self.propagator.create_initial_state(
+        state = self.propagator.create_initial_state(
             company_name,
             trade_date,
             asset_type=asset_type,
             past_context=self.memory_log.get_past_context(
                 company_name, as_of=self._memory_as_of(trade_date)
             ),
-            instrument_context=self.resolve_instrument_context(company_name, asset_type, trade_date),
+            instrument_context=(
+                self.resolve_instrument_context(company_name, asset_type, trade_date)
+                + _research_context(self)
+            ),
             portfolio_context=portfolio.render(company_name) if portfolio is not None else "",
         )
+        state.update(_research_state(self))
+        return state
 
     def settle_pending(self, company_name):
         """Settle this ticker's decisions whose holding window has now traded.
@@ -324,7 +404,7 @@ class TradingAgentsGraph:
                     if signature != last_printed:
                         msg.pretty_print()
                         last_printed = signature
-                    trace.append(chunk)
+                trace.append(chunk)
             # Streamed chunks are per-node deltas. Merge them so the returned
             # state matches what graph.invoke() yields in the non-debug path.
             final_state = {}
@@ -332,6 +412,9 @@ class TradingAgentsGraph:
                 final_state.update(chunk)
         else:
             final_state = self.graph.invoke(graph_input, **args)
+
+        # Streamed node deltas need not repeat unchanged evidence state.
+        final_state.update(_research_state(self))
 
         # Log state to disk.
         self._log_state(trade_date, final_state)

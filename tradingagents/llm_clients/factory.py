@@ -49,6 +49,14 @@ def create_llm_client(
         from .bedrock_client import BedrockClient
         return BedrockClient(model, base_url, **kwargs)
 
+    if provider_lower == "codex_subscription":
+        from .codex_subscription_client import CodexSubscriptionClient
+        return CodexSubscriptionClient(model, base_url, **kwargs)
+
+    if provider_lower == "claude_subscription":
+        from .claude_subscription_client import ClaudeSubscriptionClient
+        return ClaudeSubscriptionClient(model, base_url, **kwargs)
+
     from .openai_client import OpenAIClient, is_openai_compatible
     if is_openai_compatible(provider_lower):
         return OpenAIClient(model, base_url, provider=provider_lower, **kwargs)
@@ -87,8 +95,13 @@ def _coerce_max_tokens(value):
     return n
 
 
-def build_llm_kwargs(config: dict) -> dict[str, Any]:
-    """Keyword arguments for ``create_llm_client`` from a TradingAgents config."""
+def build_llm_kwargs(config: dict, role: str | None = None) -> dict[str, Any]:
+    """Keyword arguments for ``create_llm_client`` from a TradingAgents config.
+
+    ``role`` ("deep" or "quick") applies that role's ``<role>_think_effort``
+    override, so the managers can reason harder than the many analyst and
+    debate calls.
+    """
     kwargs = {}
     provider = config.get("llm_provider", "").lower()
 
@@ -97,15 +110,22 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
         if thinking_level:
             kwargs["thinking_level"] = thinking_level
 
-    elif provider == "openai":
+    elif provider in ("openai", "codex_subscription"):
         reasoning_effort = config.get("openai_reasoning_effort")
         if reasoning_effort:
             kwargs["reasoning_effort"] = reasoning_effort
 
-    elif provider == "anthropic":
+    elif provider in ("anthropic", "claude_subscription"):
         effort = config.get("anthropic_effort")
         if effort:
             kwargs["effort"] = effort
+
+    role_effort = config.get(f"{role}_think_effort") if role else None
+    if role_effort:
+        if provider in ("openai", "codex_subscription"):
+            kwargs["reasoning_effort"] = role_effort
+        elif provider in ("anthropic", "claude_subscription"):
+            kwargs["effort"] = role_effort
 
     # Sampling temperature is cross-provider: forward it whenever set.
     # float() here so a value coming from a TRADINGAGENTS_TEMPERATURE env

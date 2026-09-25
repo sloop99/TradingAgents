@@ -107,6 +107,33 @@ def test_portfolio_manager_prompt_states_constraint():
 
 
 @pytest.mark.unit
+def test_portfolio_manager_prompt_asks_for_its_own_price_targets():
+    from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
+
+    captured = {}
+    llm = _capturing_llm(
+        captured,
+        PortfolioDecision(rating=PortfolioRating.HOLD, executive_summary="x", investment_thesis="y"),
+    )
+    risk = {
+        "history": "h", "aggressive_history": "a", "conservative_history": "c",
+        "neutral_history": "n", "current_aggressive_response": "",
+        "current_conservative_response": "", "current_neutral_response": "",
+        "latest_speaker": "Neutral", "count": 1,
+    }
+    create_portfolio_manager(llm)({
+        "company_of_interest": "NVDA",
+        "risk_debate_state": risk,
+        "investment_plan": "plan",
+        "trader_investment_plan": "trader plan",
+    })
+    text = _prompt_text(captured["prompt"])
+    assert "12-month" in text
+    assert "bear" in text and "bull" in text
+    assert "not copy" in text
+
+
+@pytest.mark.unit
 def test_sentiment_prompt_states_constraint(monkeypatch):
     from tradingagents.agents.schemas import SentimentBand, SentimentReport
 

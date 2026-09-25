@@ -45,6 +45,10 @@ class RiskDebateState(TypedDict):
 
 
 class AgentState(MessagesState):
+    analyst_consensus: Annotated[dict, "Deterministically aggregated analyst opinions, not intrinsic value"]
+    analyst_target_input: Annotated[dict, "Source-preserving analyst target import for replay"]
+    research_packet: Annotated[dict, "Shared sourced evidence, separate from investment ratings"]
+    evidence_status: Annotated[str, "Research coverage status; missing evidence is not a Hold rating"]
     company_of_interest: Annotated[str, "Company that we are interested in trading"]
     asset_type: Annotated[str, "Asset type under analysis such as stock or crypto"]
     instrument_context: Annotated[str, "Deterministic ticker identity resolved at run start"]

@@ -94,6 +94,22 @@ _MINIMAX_MODELS: dict[str, list[ModelOption]] = {
 
 
 MODEL_OPTIONS: ProviderModeOptions = {
+    "codex_subscription": {
+        "quick": [("Codex subscription default", "default")],
+        "deep": [("Codex subscription default", "default")],
+    },
+    "claude_subscription": {
+        "quick": [
+            ("Claude Sonnet 5 - fast, near-frontier (subscription)", "claude-sonnet-5"),
+            ("Claude Opus 5.5 - most capable (subscription)", "claude-opus-5-5"),
+            ("Claude Code default model", "default"),
+        ],
+        "deep": [
+            ("Claude Opus 5.5 - most capable (subscription)", "claude-opus-5-5"),
+            ("Claude Sonnet 5 - fast, near-frontier (subscription)", "claude-sonnet-5"),
+            ("Claude Code default model", "default"),
+        ],
+    },
     "openai": {
         "quick": [
             ("GPT-6 Luna - Fast, high-volume and cost-efficient", "gpt-6-luna"),

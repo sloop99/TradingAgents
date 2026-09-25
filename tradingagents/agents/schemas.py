@@ -252,14 +252,35 @@ class PortfolioDecision(BaseModel):
     )
     price_target: float | None = Field(
         default=None,
-        description="Optional target price in the instrument's quote currency.",
+        description=(
+            "Your own 12-month base-case price target in the instrument's quote "
+            "currency, derived from your valuation reasoning rather than copied "
+            "from published analyst targets."
+        ),
+    )
+    price_target_bear: float | None = Field(
+        default=None,
+        description="Your 12-month bear-case price in the instrument's quote currency.",
+    )
+    price_target_bull: float | None = Field(
+        default=None,
+        description="Your 12-month bull-case price in the instrument's quote currency.",
+    )
+    price_target_basis: str | None = Field(
+        default=None,
+        description=(
+            "Method and key assumptions behind the three targets (e.g. multiple "
+            "applied to earnings or free cash flow, growth, margins, dilution), "
+            "the valuation inputs that were missing, and how the base case "
+            "compares with published analyst targets when they were provided."
+        ),
     )
     time_horizon: str | None = Field(
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
 
-    @field_validator("price_target", mode="before")
+    @field_validator("price_target", "price_target_bear", "price_target_bull", mode="before")
     @classmethod
     def _nullish_float_to_none(cls, v):
         return _coerce_optional_float(v)
@@ -284,6 +305,12 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
     # so a reader cannot tell "no target" from "target not reported".
     target = decision.price_target if decision.price_target is not None else "not provided"
     parts.extend(["", f"**Price Target**: {target}"])
+    if decision.price_target_bear is not None:
+        parts.extend(["", f"**Bear Case Target**: {decision.price_target_bear}"])
+    if decision.price_target_bull is not None:
+        parts.extend(["", f"**Bull Case Target**: {decision.price_target_bull}"])
+    if decision.price_target_basis:
+        parts.extend(["", f"**Target Basis**: {decision.price_target_basis}"])
     parts.extend(["", f"**Time Horizon**: {decision.time_horizon or 'not provided'}"])
     return "\n".join(parts)
 

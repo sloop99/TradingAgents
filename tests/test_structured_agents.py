@@ -137,6 +137,45 @@ class TestNullishFloatCoercion:
         assert p.entry_price == 612.40
         assert p.stop_loss is None
 
+    def test_pm_nullish_scenario_targets_coerce_to_none(self):
+        d = PortfolioDecision(
+            rating=PortfolioRating.HOLD,
+            executive_summary="s",
+            investment_thesis="t",
+            price_target_bear="none",
+            price_target_bull="",
+        )
+        assert d.price_target_bear is None
+        assert d.price_target_bull is None
+
+    def test_pm_renders_own_price_target_scenarios_and_basis(self):
+        from tradingagents.agents.schemas import render_pm_decision
+
+        md = render_pm_decision(PortfolioDecision(
+            rating=PortfolioRating.HOLD,
+            executive_summary="s",
+            investment_thesis="t",
+            price_target=264.5,
+            price_target_bear=210.0,
+            price_target_bull="310",
+            price_target_basis="22x forward FCF; consensus mean is 270.",
+        ))
+        assert "**Price Target**: 264.5" in md
+        assert "**Bear Case Target**: 210.0" in md
+        assert "**Bull Case Target**: 310.0" in md
+        assert "**Target Basis**: 22x forward FCF; consensus mean is 270." in md
+
+    def test_pm_render_omits_absent_scenario_targets(self):
+        from tradingagents.agents.schemas import render_pm_decision
+
+        md = render_pm_decision(PortfolioDecision(
+            rating=PortfolioRating.HOLD, executive_summary="s", investment_thesis="t",
+        ))
+        # The base target is always named (as "not provided"); the scenarios are omitted.
+        assert "**Price Target**: not provided" in md
+        for label in ("Bear Case Target", "Bull Case Target", "Target Basis"):
+            assert label not in md
+
 
 @pytest.mark.unit
 class TestRenderResearchPlan:
