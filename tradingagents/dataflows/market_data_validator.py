@@ -15,7 +15,8 @@ from collections.abc import Iterable
 import pandas as pd
 from stockstats import wrap
 
-from tradingagents.dataflows.stockstats_utils import load_ohlcv
+from tradingagents.dataflows.stockstats_utils import find_missing_sessions, load_ohlcv
+from tradingagents.dataflows.symbol_utils import normalize_symbol
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
 DEFAULT_SNAPSHOT_INDICATORS: tuple[str, ...] = (
@@ -92,6 +93,16 @@ def build_verified_market_snapshot(
         f"- Requested analysis date: {curr_date}",
         f"- Latest trading row used: {latest_date}",
         "- Rows after the requested analysis date are excluded before verification.",
+    ]
+    missing = find_missing_sessions(df["Date"], normalize_symbol(symbol))
+    if missing:
+        lines.append(
+            f"- DATA GAP: the vendor returned no bar for {len(missing)} trading "
+            f"session(s): {', '.join(missing)}. The indicators and recent closes "
+            "below are computed without them; say so when citing them, and do "
+            "not describe multi-session moves across the gap as exact."
+        )
+    lines += [
         "",
         "### Latest verified OHLCV row",
         "",

@@ -9,6 +9,7 @@ from .stockstats_utils import (
     StockstatsUtils,
     _assert_ohlcv_not_stale,
     filter_financials_by_date,
+    find_missing_sessions,
     load_ohlcv,
     yf_retry,
 )
@@ -65,6 +66,9 @@ def get_YFin_data_online(
     label = canonical if canonical == symbol.upper() else f"{canonical} (from {symbol})"
     header = f"# Stock data for {label} from {start_date} to {end_date}\n"
     header += f"# Total records: {len(data)}\n"
+    missing = find_missing_sessions(data.index, canonical)
+    if missing:
+        header += f"# DATA GAP: no vendor bar for trading session(s) {', '.join(missing)}\n"
     header += f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
 
     return header + csv_string

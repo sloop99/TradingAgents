@@ -1,15 +1,32 @@
+import contextlib
+import functools
 import logging
 import os
+import threading
 import time
+from collections.abc import Iterable
 from typing import Annotated
 
 import pandas as pd
 import yfinance as yf
+from pandas.tseries.holiday import (
+    AbstractHolidayCalendar,
+    GoodFriday,
+    Holiday,
+    USLaborDay,
+    USMartinLutherKingJr,
+    USMemorialDay,
+    USPresidentsDay,
+    USThanksgivingDay,
+    nearest_workday,
+    sunday_to_monday,
+)
+from pandas.tseries.offsets import CustomBusinessDay
 from stockstats import wrap
 from yfinance.exceptions import YFRateLimitError
 
 from .config import get_config
-from .symbol_utils import NoMarketDataError, normalize_symbol
+from .symbol_utils import NoMarketDataError, crypto_base, normalize_symbol
 from .utils import safe_ticker_component
 
 logger = logging.getLogger(__name__)
@@ -24,6 +41,36 @@ MAX_OHLCV_STALE_DAYS = 10
 # up today's close soon after it publishes, long enough that a day with no bar
 # at all (weekend, holiday) cannot trigger a download on every call.
 OHLCV_CACHE_TTL_SECONDS = 900
+
+# Trailing window scanned for sessions the vendor silently dropped. Covers the
+# spans of the short and medium indicators (10 EMA, RSI, MACD, 50 SMA), where a
+# single missing bar moves the values most.
+MISSING_SESSION_LOOKBACK_DAYS = 120
+
+
+class _NYSEHolidayCalendar(AbstractHolidayCalendar):
+    """Full-day NYSE closures, used only to spot sessions missing from vendor data."""
+
+    rules = [
+        # NYSE does not close on Friday when New Year's Day falls on a Saturday.
+        Holiday("New Year's Day", month=1, day=1, observance=sunday_to_monday),
+        USMartinLutherKingJr,
+        USPresidentsDay,
+        GoodFriday,
+        USMemorialDay,
+        Holiday("Juneteenth", month=6, day=19, start_date="2022-01-01", observance=nearest_workday),
+        Holiday("Independence Day", month=7, day=4, observance=nearest_workday),
+        USLaborDay,
+        USThanksgivingDay,
+        Holiday("Christmas Day", month=12, day=25, observance=nearest_workday),
+        # Unscheduled closures.
+        Holiday("National Day of Mourning (Carter)", year=2025, month=1, day=9),
+    ]
+
+
+@functools.cache
+def _nyse_session() -> CustomBusinessDay:
+    return CustomBusinessDay(calendar=_NYSEHolidayCalendar())
 
 
 def yf_retry(func, max_retries=3, base_delay=2.0):
@@ -128,6 +175,36 @@ def _assert_ohlcv_not_stale(
         )
 
 
+def find_missing_sessions(
+    dates: Iterable,
+    canonical: str,
+    *,
+    lookback_days: int = MISSING_SESSION_LOOKBACK_DAYS,
+) -> list[str]:
+    """US trading sessions absent from the recent span of ``dates``, as YYYY-MM-DD.
+
+    Yahoo intermittently serves an empty bar for a ticker, sometimes for hours,
+    and yfinance drops empty rows by default, so a frame can arrive a session
+    short with nothing marking the hole (OUST lost 2026-09-22 this way). Only
+    sessions strictly inside the covered span count: the newest bar may not be
+    published yet, and a far-stale frame is ``_assert_ohlcv_not_stale``'s job.
+    Crypto, futures, forex, indices and non-US listings follow other calendars
+    and are not checked.
+    """
+    if crypto_base(canonical) is not None or any(c in canonical for c in ".=^"):
+        return []
+    have = pd.DatetimeIndex(pd.to_datetime(pd.Series(list(dates)), errors="coerce").dropna())
+    if have.empty:
+        return []
+    if have.tz is not None:
+        have = have.tz_localize(None)
+    have = have.normalize()
+    last = have.max()
+    first = max(have.min(), last - pd.Timedelta(days=lookback_days))
+    sessions = pd.date_range(first, last, freq=_nyse_session())
+    return [d.strftime("%Y-%m-%d") for d in sessions.difference(have)]
+
+
 def _needs_same_day_refresh(data_file, curr_date_dt, today_date) -> bool:
     """Whether a cached frame must be refetched to reflect the requested day.
 
@@ -143,6 +220,25 @@ def _needs_same_day_refresh(data_file, curr_date_dt, today_date) -> bool:
     if curr_date_dt.date() < today_date.date():
         return False
     return time.time() - os.path.getmtime(data_file) > OHLCV_CACHE_TTL_SECONDS
+
+
+def _write_cache(frame: pd.DataFrame, data_file: str) -> None:
+    """Replace the cache file atomically; caching is best-effort.
+
+    Parallel tool calls on a cold cache used to truncate and rewrite the same
+    file at once, leaving the tail of the longer payload as a garbage last line.
+    Each writer now fills its own temp file and swaps it in whole.
+    """
+    tmp = f"{data_file}.{os.getpid()}-{threading.get_ident()}.tmp"
+    try:
+        frame.to_csv(tmp, index=False, encoding="utf-8")
+        os.replace(tmp, data_file)
+    except OSError as exc:
+        # e.g. Windows refuses to replace a file another reader or a racing
+        # writer has open; the caller still uses the frame it downloaded.
+        logger.warning("OHLCV cache %s not updated (%s); using the downloaded data", data_file, exc)
+        with contextlib.suppress(OSError):
+            os.remove(tmp)
 
 
 def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
@@ -206,7 +302,14 @@ def load_ohlcv(symbol: str, curr_date: str) -> pd.DataFrame:
             raise NoMarketDataError(
                 symbol, canonical, "Yahoo Finance returned no rows"
             )
-        downloaded.to_csv(data_file, index=False, encoding="utf-8")
+        _write_cache(downloaded, data_file)
+        missing = find_missing_sessions(downloaded["Date"], canonical)
+        if missing:
+            logger.warning(
+                "%s: Yahoo returned no bar for %d trading session(s): %s; "
+                "indicators are computed across the gap",
+                canonical, len(missing), ", ".join(missing),
+            )
         data = downloaded
 
     data = _clean_dataframe(data)
