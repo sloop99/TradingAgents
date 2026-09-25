@@ -8,9 +8,11 @@ from dateutil.relativedelta import relativedelta
 from .stockstats_utils import (
     StockstatsUtils,
     _assert_ohlcv_not_stale,
+    fill_missing_sessions,
     filter_financials_by_date,
     find_missing_sessions,
     load_ohlcv,
+    rebuilt_sessions,
     yf_retry,
 )
 from .symbol_utils import NoMarketDataError, normalize_symbol
@@ -52,6 +54,14 @@ def get_YFin_data_online(
     # turns into one clear unavailable signal (#1021).
     _assert_ohlcv_not_stale(data, end_date, symbol, canonical)
 
+    # Rebuild sessions Yahoo's daily feed dropped from its hourly bars.
+    filled = fill_missing_sessions(data.rename_axis("Date").reset_index(), canonical)
+    rebuilt = rebuilt_sessions(filled)
+    data = filled.drop(columns="Rebuilt", errors="ignore").set_index("Date")
+    for col in ("Dividends", "Stock Splits"):
+        if col in data.columns:
+            data[col] = data[col].fillna(0.0)
+
     # Round numerical values to 2 decimal places for cleaner display
     numeric_columns = ["Open", "High", "Low", "Close", "Adj Close"]
     for col in numeric_columns:
@@ -66,6 +76,11 @@ def get_YFin_data_online(
     label = canonical if canonical == symbol.upper() else f"{canonical} (from {symbol})"
     header = f"# Stock data for {label} from {start_date} to {end_date}\n"
     header += f"# Total records: {len(data)}\n"
+    if rebuilt:
+        header += (
+            f"# REBUILT from hourly bars (missing from the daily feed; volume "
+            f"estimated): {', '.join(rebuilt)}\n"
+        )
     missing = find_missing_sessions(data.index, canonical)
     if missing:
         header += f"# DATA GAP: no vendor bar for trading session(s) {', '.join(missing)}\n"

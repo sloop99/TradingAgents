@@ -15,7 +15,11 @@ from collections.abc import Iterable
 import pandas as pd
 from stockstats import wrap
 
-from tradingagents.dataflows.stockstats_utils import find_missing_sessions, load_ohlcv
+from tradingagents.dataflows.stockstats_utils import (
+    find_missing_sessions,
+    load_ohlcv,
+    rebuilt_sessions,
+)
 from tradingagents.dataflows.symbol_utils import normalize_symbol
 
 # A fixed, common indicator set so the snapshot is the same shape every run.
@@ -94,6 +98,13 @@ def build_verified_market_snapshot(
         f"- Latest trading row used: {latest_date}",
         "- Rows after the requested analysis date are excluded before verification.",
     ]
+    rebuilt = rebuilt_sessions(df)
+    if rebuilt:
+        lines.append(
+            f"- DATA NOTE: the vendor's daily feed had no bar for {', '.join(rebuilt)}; "
+            "it was rebuilt from hourly bars (prices typically within 0.1-0.2% of "
+            "the official bar; that day's volume is an estimate)."
+        )
     missing = find_missing_sessions(df["Date"], normalize_symbol(symbol))
     if missing:
         lines.append(
