@@ -1,6 +1,6 @@
 // Research Ledger shell: hash routing, data loading, keyboard, theme, search, footer.
 
-import { getRuns, getSectors, refreshRuns } from "./api.js";
+import { getEarnings, getRuns, getSectors, refreshRuns } from "./api.js";
 import { el, isCostCarried } from "./format.js";
 import { renderMarket } from "./views/market.js";
 import { renderPositions } from "./views/positions.js";
@@ -15,6 +15,9 @@ const state = {
   refreshError: null,
   sectors: null,
   sectorsError: null,
+  earnings: null,
+  earningsError: null,
+  agendaExpanded: false,
   query: "",
   showTests: false,
   selectedKey: null,
@@ -57,6 +60,9 @@ function context() {
     runsError: state.runsError,
     sectors: state.sectors,
     sectorsError: state.sectorsError,
+    earnings: state.earnings,
+    earningsError: state.earningsError,
+    agendaExpanded: state.agendaExpanded,
     query: state.query,
     showTests: state.showTests,
     selectedKey: state.selectedKey,
@@ -65,6 +71,8 @@ function context() {
     navigate,
     retry: loadRuns,
     retrySectors: loadSectors,
+    retryEarnings: loadEarnings,
+    setAgendaExpanded: (expanded) => { state.agendaExpanded = expanded; },
     setSelected: (key) => { state.selectedKey = key; },
     setMarketFocus: (symbol) => { state.marketFocus = symbol; },
   };
@@ -134,6 +142,18 @@ async function loadSectors() {
   if (currentRoute?.name !== "report") render({ force: true });
 }
 
+async function loadEarnings() {
+  state.earningsError = null;
+  try {
+    state.earnings = await getEarnings();
+  } catch (error) {
+    state.earningsError = error;
+  }
+  // The report page patches its header in place rather than re-rendering (and re-fetching) the reader.
+  if (currentRoute?.name === "report") controller.onEarnings?.(state.earnings);
+  else if (currentRoute?.name === "positions") render({ force: true });
+}
+
 async function refresh() {
   const button = $("#refresh");
   button.disabled = true;
@@ -143,6 +163,7 @@ async function refresh() {
     state.refreshError = null;
     state.runsError = null;
     loadSectors();
+    loadEarnings();
     render({ force: true });
     toast(`Archive refreshed · ${state.data.summary.runs} runs`);
   } catch (error) {
@@ -279,6 +300,7 @@ function boot() {
   syncThemeButton();
   loadRuns();
   loadSectors();
+  loadEarnings();
 }
 
 boot();

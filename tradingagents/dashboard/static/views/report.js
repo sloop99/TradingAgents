@@ -2,8 +2,8 @@
 
 import { getReport } from "../api.js";
 import {
-  describeChange, el, evidenceNode, formatDate, horizonLabel, isCostCarried, link, money, RATING_ORDER, runHref,
-  slugify, valuationLabel, verdictTag,
+  describeChange, el, evidenceNode, formatDate, horizonLabel, isCostCarried, link, money, nextEarningsText,
+  RATING_ORDER, runHref, slugify, valuationLabel, verdictTag,
 } from "../format.js";
 import { renderMarkdown } from "../markdown.js";
 import { hasStructuredAnalyst, renderAnalyst } from "../research.js";
@@ -71,7 +71,9 @@ export function renderReport(root, ctx, route) {
   const position = history.findIndex((item) => item.run_id === run.id);
   const previousRated = history.slice(0, position).reverse().find((item) => item.rating in RATING_ORDER) || null;
 
-  page.append(header(run, previousRated));
+  const head = header(run, previousRated);
+  head.fillEarnings(ctx.earnings);
+  page.append(head.element);
   const strip = historyStrip(history, position, ctx);
   page.append(strip.element);
 
@@ -144,6 +146,7 @@ export function renderReport(root, ctx, route) {
   return {
     handles: (next) => next.name === "report" && next.runId === run.id,
     update: (next) => showSection(next.section),
+    onEarnings: (earnings) => head.fillEarnings(earnings),
     onKey(event) {
       if (event.key === "[") { step(-1); return true; }
       if (event.key === "]") { step(1); return true; }
@@ -190,6 +193,12 @@ function header(run, previousRated) {
   const valuation = valuationLabel(run.valuation_status);
   if (valuation !== "—") fact("Verified valuation", valuation);
   head.append(facts);
+  // Filled in by fillEarnings once the calendar has loaded (it can arrive after the report renders).
+  const nextFact = el("div");
+  const nextValue = el("dd");
+  nextFact.append(el("dt", "", "Next earnings"), nextValue);
+  const alertSlot = el("div");
+  head.append(alertSlot);
   const targets = renderTargets(run);
   if (targets) head.append(targets);
   const valuationPanel = renderValuation(run);
@@ -204,7 +213,22 @@ function header(run, previousRated) {
     notes.append(list);
     head.append(notes);
   }
-  return head;
+
+  const fillEarnings = (earnings) => {
+    const next = earnings?.next_earnings?.[run.ticker];
+    if (next) {
+      nextValue.textContent = nextEarningsText(next);
+      if (!nextFact.isConnected) facts.append(nextFact);
+    } else {
+      nextFact.remove();
+    }
+    const alert = (earnings?.alerts || []).find((item) =>
+      item.ticker === run.ticker && (item.kind === "post_earnings" || item.kind === "pre_earnings"));
+    alertSlot.replaceChildren(...(alert
+      ? [el("p", `banner ${alert.severity === "rerun" ? "bad" : "warn"} report-alert`, `Earnings · ${alert.message}`)]
+      : []));
+  };
+  return { element: head, fillEarnings };
 }
 
 function headerChange(run, previousRated) {

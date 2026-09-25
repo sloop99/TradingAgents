@@ -49,6 +49,21 @@ export function formatDate(value, style = "day") {
   return style === "short" ? text.toUpperCase() : text;
 }
 
+/** "Wed Sep 30" */
+export function weekdayDate(value) {
+  const parsed = parseDay(value);
+  if (!parsed) return "—";
+  return new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })
+    .format(parsed).replace(",", "");
+}
+
+/** Whole days from one ISO date to another, or null. */
+export function daysBetween(from, to) {
+  const start = parseDay(from);
+  const end = parseDay(to);
+  return start && end ? Math.round((end - start) / 86_400_000) : null;
+}
+
 export function money(value, currency = "USD") {
   if (value == null || !Number.isFinite(Number(value))) return "—";
   try {
@@ -136,6 +151,30 @@ export function horizonLabel(value) {
 
 export function isCostCarried(run) {
   return Boolean(run.average_cost_as_of && run.average_cost_as_of !== run.analysis_date);
+}
+
+// ---------- earnings calendar ----------
+
+const TIMING_LABELS = { before_open: "before open", after_close: "after close" };
+
+/** "before open" / "after close", or null when Yahoo gave no time. */
+export const timingLabel = (timing) => TIMING_LABELS[timing] || null;
+
+/** Days until a report: "today", "5d", or "—". */
+export const countdown = (days) => (days == null || days < 0 ? "—" : days === 0 ? "today" : `${days}d`);
+
+/** "$113.6B" */
+export function compactMoney(value) {
+  if (value == null || !Number.isFinite(Number(value))) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency", currency: "USD", notation: "compact", maximumFractionDigits: 1,
+  }).format(Number(value));
+}
+
+/** "Thu Oct 29 · after close", with "~" and "estimated" for unconfirmed dates. */
+export function nextEarningsText(next) {
+  const timing = timingLabel(next.timing);
+  return `${next.estimated ? "~" : ""}${weekdayDate(next.date)}${timing ? ` · ${timing}` : ""}${next.estimated ? " · estimated" : ""}`;
 }
 
 // ---------- report sections ----------

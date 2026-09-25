@@ -257,9 +257,57 @@ a { color: var(--acc); }
 .latest-title .tk { font: 700 15px var(--mono); }
 .latest-excerpt { margin: 6px 0 8px; color: var(--ink-2); }
 .panel-foot { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-top: 6px; }
+.alert-dot { margin-left: 5px; font-size: 9px; vertical-align: 1px; cursor: help; }
+.ledger td.soon { color: var(--warn); font-weight: 600; }
 .mini-chart { display: block; width: 100%; margin: 8px 0 4px; padding: 0; border: 0; background: none; cursor: pointer; }
 .mini-chart:focus-visible { outline-offset: 0; }
 .chart-note { margin: 6px 0 0; font-size: 11px; color: var(--mu); }
+
+/* Agenda: rerun queue and upcoming earnings/dividends (views/agenda.js) */
+.eyebrow-split { display: flex; justify-content: space-between; gap: 8px; }
+.eyebrow-note { font-weight: 400; letter-spacing: .06em; }
+.agenda .banner { margin: 8px 0 0; }
+.queue { margin: 8px 0 2px; }
+.queue-head { margin: 0 0 2px; font: 700 9px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--head); }
+.queue-clear { margin: 0; font-size: 11px; color: var(--mu); }
+.queue-row {
+  display: flex; align-items: baseline; gap: 6px;
+  padding: 2px 4px; margin: 0 -4px; border-radius: var(--radius);
+  color: var(--ink-2); font-size: 12px; text-decoration: none;
+}
+a.queue-row:hover { background: var(--sel); }
+.queue-row .tk { font: 700 11px var(--mono); color: var(--ink); text-decoration: none; }
+.queue-row a.tk:hover { text-decoration: underline; }
+.queue-row.is-watch > .tk { color: var(--mu); font-weight: 400; }
+.queue-row .dot { flex: none; font-size: 9px; }
+.sev-rerun { color: var(--bad); }
+.sev-due { color: var(--warn); }
+.sev-pending { color: var(--mu); }
+.agenda-list { margin-top: 2px; }
+.agenda-table { width: 100%; border-collapse: collapse; font: 11px var(--mono); }
+.agenda-week {
+  margin-top: 8px; padding-bottom: 2px; border-bottom: 1px solid var(--line); text-align: left;
+  font: 700 9px/1.4 var(--mono); letter-spacing: .1em; text-transform: uppercase; color: var(--mu);
+}
+.agenda-table td { padding: 2px 8px 2px 0; white-space: nowrap; }
+.agenda-table td:last-child { padding-right: 0; }
+.ag-date { width: 1%; color: var(--ink-2); text-transform: uppercase; }
+.ag-tk { width: 1%; font-weight: 700; }
+.ag-tk a { color: var(--ink); text-decoration: none; }
+.agenda-row.is-watch .ag-tk a { color: var(--mu); font-weight: 400; }
+.ag-verdict { width: 1%; }
+.ag-when { color: var(--mu); }
+.ag-eps { text-align: right; color: var(--mu); }
+.ag-div { color: var(--acc); }
+.agenda-more {
+  margin: 6px 0 0; padding: 0; border: 0; background: none; cursor: pointer;
+  font: 600 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--acc);
+}
+.agenda-more:hover { text-decoration: underline; }
+.agenda-foot { margin: 6px 0 0; font-size: 11px; color: var(--mu); }
+.agenda-notes { margin-top: 6px; font-size: 11px; color: var(--mu); }
+.agenda-notes summary { cursor: pointer; color: var(--warn); font-family: var(--mono); }
+.agenda-notes ul { margin: 4px 0 0; padding-left: 16px; }
 
 /* ============================================================
    Report
@@ -274,6 +322,7 @@ a { color: var(--acc); }
 .facts div { display: flex; gap: 5px; }
 .facts dt { margin: 0; }
 .facts dd { margin: 0; color: var(--ink); font: 600 11px var(--mono); }
+.report-alert { margin: 8px 0 0; font-family: var(--mono); font-size: 11px; }
 .notes { margin-top: 6px; font-size: 11px; color: var(--mu); }
 .notes summary { cursor: pointer; color: var(--warn); font-family: var(--mono); }
 .notes ul { margin: 4px 0 0; padding-left: 16px; }
@@ -435,6 +484,7 @@ a { color: var(--acc); }
   .col-opt { display: none; }
   .ledger td.chg { white-space: normal; min-width: 7em; }
   .ev-inline { display: inline; }
+  .ag-when { display: none; }
   .report-head { padding: 10px 12px 0; }
   .history { margin: 10px 12px 0; padding: 6px 8px; }
   .history-steps .btn { padding: 0 6px; }

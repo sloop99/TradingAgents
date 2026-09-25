@@ -23,6 +23,7 @@ async function getJson(url, action, options = {}) {
 export const getRuns = () => getJson("/api/runs", "Loading the research archive");
 export const refreshRuns = () => getJson("/api/refresh", "Refreshing the archive", { method: "POST" });
 export const getSectors = () => getJson("/api/sectors", "Loading sector observations");
+export const getEarnings = () => getJson("/api/earnings", "Loading the earnings calendar");
 export const getReport = (runId, section) => getJson(
   `/api/report?id=${encodeURIComponent(runId)}&section=${encodeURIComponent(section)}`,
   "Loading this section",

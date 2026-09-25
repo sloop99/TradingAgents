@@ -1,6 +1,6 @@
 # Earnings calendar and rerun alerts
 
-**Status:** design approved in brainstorming. Waiting for spec review.
+**Status:** implemented. Changes made during implementation are marked *(implementation)*.
 **Date:** 2026-09-25
 **Branch:** `codex/research-dashboard`
 **Scope:**
@@ -106,10 +106,11 @@ These are pure functions with no I/O: `evaluate(tickers, calendar, now) -> list[
 - **A session has closed** once it is 16:00 New York time on a weekday. Weekends are skipped. *Market holidays are not modeled*, so around a holiday an alert can appear one session early. The automation follow-up adds a trading calendar.
 - **Research date:**
   - The `analysis_date` of the ticker's newest completed, non-test, non-evidence-only run.
-  - It is **none** when only evidence packets exist (GSAT and CAT today). None counts as older than any threshold, and the alert message says "no full report yet".
+  - It is **none** when only evidence packets exist (GSAT and CAT today).
+  - *(implementation)* A ticker with no full report gets **no earnings alerts**, because without a verdict there's nothing to go stale. Otherwise CAT would carry a permanent "reported Jul 29" alert. A holding with no full report still gets `weekly_due` with the message "no full report yet".
 - **Reported date R:** the latest of these two:
   - `last_reported.date`
-  - `next_earnings.date`, once that report is out: its date is before today, or it is today and either it is a before-open report or it is 16:00 or later
+  - `next_earnings.date`, once that report is out: its date is before today, or it is today and it's past the release time (09:30 for a before-open report, 16:00 otherwise) *(implementation: before-open reports previously counted as out all day)*
   - This rule keeps alerts correct when the calendar snapshot is older than the report.
 - **Post-earnings slot S:**
   - For a `before_open` report, S is R itself.
@@ -188,13 +189,14 @@ Each request re-reads the file and recomputes the alerts against the current tim
 - **`events`:** earnings for every ticker, plus `ex_dividend` and `dividend_paid` for holdings. It covers today through today + 60 days. Events are sorted by date, then earnings before dividends, then holdings before watching, then by ticker.
 - **`next_earnings`:** every dated ticker, including ones past the 60-day window (CRWD's Dec 1 report is 67 days out).
 - **`missing`:** tickers in the archive that aren't in the snapshot, for example one researched after the last calendar refresh.
+- **`undated`:** tickers whose snapshot entry has no next report. A date that has already passed in an old snapshot isn't counted as undated; the stale banner covers that case.
 - **Server and CLI changes:**
   - `DashboardState` gains `earnings_file`, defaulting to `roots[0] / "earnings-calendar.json"`.
   - `tradingagents.dashboard` gains `--earnings-file`.
 
 ### Agenda panel (Positions, right column, first panel)
 
-The right column becomes **Agenda**, then **Latest report**, then **Sector chart**. The agenda lives in a new module, `static/agenda.js`, because `positions.js` is already long.
+The right column becomes **Agenda**, then **Latest report**, then **Sector chart**. The agenda lives in a new module, `static/views/agenda.js`, next to the other view pieces, because `positions.js` is already long.
 
 1. **Eyebrow:** `UPCOMING · EARNINGS & DIVIDENDS`, with `yahoo · <retrieved date>` on the right.
 2. **Rerun queue:** shown only when there are alerts.
@@ -238,9 +240,9 @@ The right column becomes **Agenda**, then **Latest report**, then **Sector chart
 - **`shared.js`:** adds `EARNINGS_COMMAND`.
 - **The CSP stays `'self'`.** There are no inline styles, and colors come from the existing tokens (`--bad`, `--warn`, `--mu`, `--acc`).
 
-### Launcher (`scripts/research.py`, untracked in the canonical checkout)
+### Launcher (`scripts/research.py`)
 
-This file is outside this branch, so it's changed by hand:
+This file is outside this branch, so it's changed by hand. *(implementation)* While this work was in progress, the launcher moved from the canonical checkout's working tree into the `wip/codex-subscription` branch, so the change below hasn't been applied yet. Until it is, run the collector directly from the dashboard worktree with `python -m tradingagents.research.earnings_calendar --output <artifacts>/earnings-calendar.json`. The dashboard already reads `<scan root>/earnings-calendar.json` by default.
 - Add `"earnings": "tradingagents.research.earnings_calendar"`, with defaults `--output <artifacts>/earnings-calendar.json` and `--scan-root <artifacts>`.
 - Add `--earnings-file <artifacts>/earnings-calendar.json` to the dashboard defaults.
 
@@ -248,7 +250,7 @@ This file is outside this branch, so it's changed by hand:
 
 | Situation | Behavior |
 |---|---|
-| No snapshot file | The panel explains and shows the `research.py earnings` command. The tables show `—` under Next. There are no alerts. |
+| No snapshot file | The panel explains and shows the `research.py earnings` command. The tables show `—` under Next. *(implementation)* Weekly-run alerts still appear, because they don't depend on the calendar. |
 | Stale snapshot (more than 3 days) | An amber banner in the panel. Alerts are still computed. |
 | Invalid snapshot | `unavailable`, with the reason from the loader. |
 | `/api/earnings` fails | The panel shows an error with Retry. The rest of the page works. |

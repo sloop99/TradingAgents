@@ -3,6 +3,7 @@
 import { el, formatDate } from "../format.js";
 
 export const SECTOR_COMMAND = ".\\.venv\\Scripts\\python.exe scripts\\research.py sectors";
+export const EARNINGS_COMMAND = ".\\.venv\\Scripts\\python.exe scripts\\research.py earnings";
 
 export function errorPanel(title, error, onRetry = null) {
   const panel = el("section", "panel error-panel");

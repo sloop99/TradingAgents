@@ -1,11 +1,12 @@
 // Positions (#/): holdings and watching tables, the latest report, and a sector mini chart.
 
 import {
-  benchmarkName, describeChange, el, evidenceNode, formatDate, isCostCarried, link, money, RATING_ORDER,
-  runHref, truncate, validSectorPoints, valuationLabel, verdictTag,
+  benchmarkName, countdown, daysBetween, describeChange, el, evidenceNode, formatDate, isCostCarried, link, money,
+  nextEarningsText, RATING_ORDER, runHref, truncate, validSectorPoints, valuationLabel, verdictTag,
 } from "../format.js";
 import { mountSectorChart } from "../sector-chart.js";
 import { estimateTitle, headlineMultiple, modelTarget, modelTitle, streetTargets, streetTitle } from "../targets.js";
+import { agendaPanel } from "./agenda.js";
 import { errorPanel, loadingState, sectorBanner, sectorMissing } from "./shared.js";
 
 const newestFirst = (a, b) =>
@@ -39,7 +40,7 @@ export function renderPositions(root, ctx) {
   const grid = el("div", "positions");
   const tables = el("div", "positions-tables");
   const side = el("aside", "positions-side");
-  side.setAttribute("aria-label", "Latest report and market context");
+  side.setAttribute("aria-label", "Upcoming events, latest report and market context");
   grid.append(tables, side);
   page.append(grid);
 
@@ -52,15 +53,16 @@ export function renderPositions(root, ctx) {
     });
   };
 
+  const earnings = ctx.earnings;
   if (query && !holdings.length && !watching.length && !tests.length) {
     tables.append(el("p", "no-match", `No tickers match "${ctx.query.trim()}".`));
   } else {
-    tables.append(group("Holdings", holdings, { withCost: true }, register));
-    tables.append(group("Watching", watching, { withCost: false }, register));
-    if (ctx.showTests) tables.append(group("Test runs", tests, { withCost: false, isTest: true }, register));
+    tables.append(group("Holdings", holdings, { withCost: true, earnings }, register));
+    tables.append(group("Watching", watching, { withCost: false, earnings }, register));
+    if (ctx.showTests) tables.append(group("Test runs", tests, { withCost: false, isTest: true, earnings }, register));
   }
 
-  side.append(latestReportCard(tickerRows));
+  side.append(agendaPanel(ctx), latestReportCard(tickerRows));
   const sectorPanel = el("section", "panel");
   side.append(sectorPanel);
   const chart = renderSectorPanel(sectorPanel, ctx);
@@ -111,11 +113,14 @@ function group(title, rows, options, register) {
   return section;
 }
 
-function positionsTable(title, rows, { withCost, isTest = false }, register) {
+function positionsTable(title, rows, { withCost, isTest = false, earnings }, register) {
+  const alerts = new Map((earnings?.alerts || [])
+    .filter((alert) => alert.severity !== "pending")
+    .map((alert) => [alert.ticker, alert]));
   const table = el("table", "ledger");
   table.append(el("caption", "sr-only", `${title}: one row per ticker, showing its latest rated run`));
   const head = el("tr");
-  [["Ticker"], ["Verdict"], ["Since last run"], ["Evidence", true], ["Valuation", true], ["Target", true], ["Street", true], ...(withCost ? [["Cost", true]] : []), ["Run"]]
+  [["Ticker"], ["Verdict"], ["Since last run"], ["Evidence", true], ["Valuation", true], ["Target", true], ["Street", true], ...(withCost ? [["Cost", true]] : []), ["Next", true], ["Run"]]
     .forEach(([label, optional]) => {
       const th = el("th", optional ? "col-opt" : "", label);
       th.scope = "col";
@@ -131,6 +136,8 @@ function positionsTable(title, rows, { withCost, isTest = false }, register) {
 
     const tickerCell = el("td", "tk");
     tickerCell.append(link(runHref(run.id), "", run.ticker));
+    const alert = isTest ? null : alerts.get(run.ticker);
+    if (alert) tickerCell.append(alertDot(alert));
     const verdictCell = el("td");
     const rating = summary ? summary.rating : run.rating;
     verdictCell.append(verdictTag(summary ? summary.decision : run.decision, rating));
@@ -149,6 +156,7 @@ function positionsTable(title, rows, { withCost, isTest = false }, register) {
 
     const cells = [tickerCell, verdictCell, changeCell, evidenceCell, valuationCell, targetCell(run), streetCell(run)];
     if (withCost) cells.push(costCell(run));
+    cells.push(nextCell(run.ticker, earnings));
     const dateCell = el("td", "num muted", formatDate(run.analysis_date, "short"));
     dateCell.title = formatDate(run.analysis_date, "long");
     cells.push(dateCell);
@@ -185,6 +193,24 @@ function streetCell(run) {
   const street = streetTargets(run);
   const cell = el("td", `num col-opt${street ? "" : " muted"}`, street ? money(street.mean, street.currency) : "—");
   if (street) cell.title = streetTitle(street);
+  return cell;
+}
+
+function alertDot(alert) {
+  const node = el("span", `alert-dot sev-${alert.severity}`);
+  node.title = alert.message;
+  node.append(el("span", "", "●"), el("span", "sr-only", ` ${alert.message}`));
+  node.firstChild.setAttribute("aria-hidden", "true");
+  return node;
+}
+
+function nextCell(ticker, earnings) {
+  const next = earnings?.next_earnings?.[ticker];
+  if (!next) return el("td", "num col-opt muted", "—");
+  const days = daysBetween(earnings.today, next.date);
+  const cell = el("td", `num col-opt${days != null && days <= 7 ? " soon" : ""}`,
+    `${next.estimated ? "~" : ""}${countdown(days)}`);
+  cell.title = `Earnings ${nextEarningsText(next)}`;
   return cell;
 }
 

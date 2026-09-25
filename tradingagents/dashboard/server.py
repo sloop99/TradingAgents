@@ -11,6 +11,7 @@ from pathlib import Path
 from threading import Lock
 from urllib.parse import parse_qs, urlparse
 
+from .earnings import earnings_payload
 from .indexer import ResearchIndex, build_index
 from .sectors import load_sector_snapshot
 
@@ -26,9 +27,10 @@ _STATIC_TYPES = {
 
 
 class DashboardState:
-    def __init__(self, roots: list[Path], sector_file: Path | None = None):
+    def __init__(self, roots: list[Path], sector_file: Path | None = None, earnings_file: Path | None = None):
         self.roots = roots
         self.sector_file = sector_file or (roots[0] / "sector-rotation.json" if roots else None)
+        self.earnings_file = earnings_file or (roots[0] / "earnings-calendar.json" if roots else None)
         self._lock = Lock()
         self.index = build_index(roots)
 
@@ -48,6 +50,9 @@ def handler_factory(state: DashboardState):
             parsed = urlparse(self.path)
             if parsed.path == "/api/sectors":
                 self._json(load_sector_snapshot(state.sector_file))
+                return
+            if parsed.path == "/api/earnings":
+                self._json(earnings_payload(state.earnings_file, state.index))
                 return
             if parsed.path == "/api/runs":
                 self._json(state.index.public_payload())
@@ -127,10 +132,11 @@ def serve(
     *,
     open_browser: bool = False,
     sector_file: Path | None = None,
+    earnings_file: Path | None = None,
 ) -> None:
     if host not in {"127.0.0.1", "localhost", "::1"}:
         raise ValueError("The research dashboard only binds to a local loopback address")
-    state = DashboardState(roots, sector_file=sector_file)
+    state = DashboardState(roots, sector_file=sector_file, earnings_file=earnings_file)
     server = ThreadingHTTPServer((host, port), handler_factory(state))
     if open_browser:
         webbrowser.open(f"http://{host}:{port}")
